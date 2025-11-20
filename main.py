@@ -24,6 +24,10 @@ logo_tmpl = r"""
 
 """
 
+import pydevd_pycharm
+
+pydevd_pycharm.settrace('127.0.0.1', port=5566, suspend=False, trace_only_current_thread=False)
+
 
 def check_env():
     if not (sys.version_info.major == 3 and sys.version_info.minor >= 10):

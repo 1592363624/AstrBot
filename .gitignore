@@ -47,3 +47,6 @@ astrbot.lock
 chroma
 venv/*
 pytest.ini
+/.trae
+/.lingma
+/.run
