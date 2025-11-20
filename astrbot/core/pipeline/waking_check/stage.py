@@ -73,21 +73,29 @@ class WakingCheckStage(Stage):
         wake_prefixes = self.ctx.astrbot_config["wake_prefix"]
         messages = event.get_messages()
         is_wake = False
-        for wake_prefix in wake_prefixes:
-            if event.message_str.startswith(wake_prefix):
-                if (
-                    not event.is_private_chat()
-                    and isinstance(messages[0], At)
-                    and str(messages[0].qq) != str(event.get_self_id())
-                    and str(messages[0].qq) != "all"
-                ):
-                    # 如果是群聊，且第一个消息段是 At 消息，但不是 At 机器人或 At 全体成员，则不唤醒
+        
+        # 如果 wake_prefixes 为空，表示任何消息都能触发命令
+        if len(wake_prefixes) == 0:
+            is_wake = True
+            event.is_at_or_wake_command = True
+            event.is_wake = True
+        else:
+            # 原有的前缀检查逻辑
+            for wake_prefix in wake_prefixes:
+                if event.message_str.startswith(wake_prefix):
+                    if (
+                        not event.is_private_chat()
+                        and isinstance(messages[0], At)
+                        and str(messages[0].qq) != str(event.get_self_id())
+                        and str(messages[0].qq) != "all"
+                    ):
+                        # 如果是群聊，且第一个消息段是 At 消息，但不是 At 机器人或 At 全体成员，则不唤醒
+                        break
+                    is_wake = True
+                    event.is_at_or_wake_command = True
+                    event.is_wake = True
+                    event.message_str = event.message_str[len(wake_prefix) :].strip()
                     break
-                is_wake = True
-                event.is_at_or_wake_command = True
-                event.is_wake = True
-                event.message_str = event.message_str[len(wake_prefix) :].strip()
-                break
         if not is_wake:
             # 检查是否有at消息 / at全体成员消息 / 引用了bot的消息
             for message in messages:
