@@ -34,6 +34,7 @@ dashboard/node_modules/
 dashboard/dist/
 package-lock.json
 package.json
+yarn.lock
 
 # Operating System
 **/.DS_Store
@@ -47,6 +48,5 @@ astrbot.lock
 chroma
 venv/*
 pytest.ini
-/.trae
-/.lingma
-/.run
+AGENTS.md
+IFLOW.md

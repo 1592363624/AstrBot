@@ -5,7 +5,6 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import Image, Plain
 from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.core import logger
-from astrbot.core.provider.sources.dify_source import ProviderDify
 
 from .commands import (
     AdminCommands,
@@ -279,33 +278,20 @@ class Main(star.Star):
                     return
                 try:
                     conv = None
-                    if provider.meta().type != "dify":
-                        session_curr_cid = await self.context.conversation_manager.get_curr_conversation_id(
-                            event.unified_msg_origin,
-                        )
+                    session_curr_cid = await self.context.conversation_manager.get_curr_conversation_id(
+                        event.unified_msg_origin,
+                    )
 
-                        if not session_curr_cid:
-                            logger.error(
-                                "当前未处于对话状态，无法主动回复，请确保 平台设置->会话隔离(unique_session) 未开启，并使用 /switch 序号 切换或者 /new 创建一个会话。",
-                            )
-                            return
+                    if not session_curr_cid:
+                        logger.error(
+                            "当前未处于对话状态，无法主动回复，请确保 平台设置->会话隔离(unique_session) 未开启，并使用 /switch 序号 切换或者 /new 创建一个会话。",
+                        )
+                        return
 
-                        conv = await self.context.conversation_manager.get_conversation(
-                            event.unified_msg_origin,
-                            session_curr_cid,
-                        )
-                    else:
-                        # Dify 自己有维护对话，不需要 bot 端维护。
-                        assert isinstance(provider, ProviderDify)
-                        cid = provider.conversation_ids.get(
-                            event.unified_msg_origin,
-                            None,
-                        )
-                        if cid is None:
-                            logger.error(
-                                "[Dify] 当前未处于对话状态，无法主动回复，请确保 平台设置->会话隔离(unique_session) 未开启，并使用 /switch 序号 切换或者 /new 创建一个会话。",
-                            )
-                            return
+                    conv = await self.context.conversation_manager.get_conversation(
+                        event.unified_msg_origin,
+                        session_curr_cid,
+                    )
 
                     prompt = event.message_str
 
@@ -336,7 +322,7 @@ class Main(star.Star):
 
     @filter.on_llm_response()
     async def inject_reasoning(self, event: AstrMessageEvent, resp: LLMResponse):
-        """在 LLM 响应后基于配置注入思考过程文本"""
+        """在 LLM 响应后基于配置注入思考过程文本 / 在 LLM 响应后记录对话"""
         umo = event.unified_msg_origin
         cfg = self.context.get_config(umo).get("provider_settings", {})
         show_reasoning = cfg.get("display_reasoning_text", False)
@@ -345,12 +331,9 @@ class Main(star.Star):
                 f"🤔 思考: {resp.reasoning_content}\n\n{resp.completion_text}"
             )
 
-    @filter.after_message_sent()
-    async def after_llm_req(self, event: AstrMessageEvent):
-        """在 LLM 请求后记录对话"""
         if self.ltm and self.ltm_enabled(event):
             try:
-                await self.ltm.after_req_llm(event)
+                await self.ltm.after_req_llm(event, resp)
             except Exception as e:
                 logger.error(f"ltm: {e}")
 

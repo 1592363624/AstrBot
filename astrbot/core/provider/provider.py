@@ -1,5 +1,6 @@
 import abc
 import asyncio
+import os
 from collections.abc import AsyncGenerator
 
 from astrbot.core.agent.message import Message
@@ -11,6 +12,7 @@ from astrbot.core.provider.entities import (
     ToolCallsResult,
 )
 from astrbot.core.provider.register import provider_cls_map
+from astrbot.core.utils.astrbot_path import get_astrbot_path
 
 
 class AbstractProvider(abc.ABC):
@@ -42,6 +44,14 @@ class AbstractProvider(abc.ABC):
             provider_type=meta_data.provider_type,
         )
         return meta
+
+    async def test(self):
+        """test the provider is a
+
+        raises:
+            Exception: if the provider is not available
+        """
+        ...
 
 
 class Provider(AbstractProvider):
@@ -165,6 +175,12 @@ class Provider(AbstractProvider):
 
         return dicts
 
+    async def test(self, timeout: float = 45.0):
+        await asyncio.wait_for(
+            self.text_chat(prompt="REPLY `PONG` ONLY"),
+            timeout=timeout,
+        )
+
 
 class STTProvider(AbstractProvider):
     def __init__(self, provider_config: dict, provider_settings: dict) -> None:
@@ -177,6 +193,14 @@ class STTProvider(AbstractProvider):
         """获取音频的文本"""
         raise NotImplementedError
 
+    async def test(self):
+        sample_audio_path = os.path.join(
+            get_astrbot_path(),
+            "samples",
+            "stt_health_check.wav",
+        )
+        await self.get_text(sample_audio_path)
+
 
 class TTSProvider(AbstractProvider):
     def __init__(self, provider_config: dict, provider_settings: dict) -> None:
@@ -188,6 +212,9 @@ class TTSProvider(AbstractProvider):
     async def get_audio(self, text: str) -> str:
         """获取文本的音频，返回音频文件路径"""
         raise NotImplementedError
+
+    async def test(self):
+        await self.get_audio("hi")
 
 
 class EmbeddingProvider(AbstractProvider):
@@ -210,6 +237,9 @@ class EmbeddingProvider(AbstractProvider):
     def get_dim(self) -> int:
         """获取向量的维度"""
         ...
+
+    async def test(self):
+        await self.get_embedding("astrbot")
 
     async def get_embeddings_batch(
         self,
@@ -294,3 +324,8 @@ class RerankProvider(AbstractProvider):
     ) -> list[RerankResult]:
         """获取查询和文档的重排序分数"""
         ...
+
+    async def test(self):
+        result = await self.rerank("Apple", documents=["apple", "banana"])
+        if not result:
+            raise Exception("Rerank provider test failed, no results returned")

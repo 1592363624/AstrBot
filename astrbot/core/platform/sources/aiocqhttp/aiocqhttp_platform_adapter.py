@@ -38,9 +38,8 @@ class AiocqhttpAdapter(Platform):
         platform_settings: dict,
         event_queue: asyncio.Queue,
     ) -> None:
-        super().__init__(event_queue)
+        super().__init__(platform_config, event_queue)
 
-        self.config = platform_config
         self.settings = platform_settings
         self.unique_session = platform_settings["unique_session"]
         self.host = platform_config["ws_reverse_host"]
@@ -154,7 +153,9 @@ class AiocqhttpAdapter(Platform):
         """OneBot V11 通知类事件"""
         abm = AstrBotMessage()
         abm.self_id = str(event.self_id)
-        abm.sender = MessageMember(user_id=str(event.user_id), nickname=event.user_id)
+        abm.sender = MessageMember(
+            user_id=str(event.user_id), nickname=str(event.user_id)
+        )
         abm.type = MessageType.OTHER_MESSAGE
         if event.get("group_id"):
             abm.group_id = str(event.group_id)
@@ -246,7 +247,13 @@ class AiocqhttpAdapter(Platform):
                     if m["data"].get("url") and m["data"].get("url").startswith("http"):
                         # Lagrange
                         logger.info("guessing lagrange")
-                        file_name = m["data"].get("file_name", "file")
+                        # 检查多个可能的文件名字段
+                        file_name = (
+                            m["data"].get("file_name", "")
+                            or m["data"].get("name", "")
+                            or m["data"].get("file", "")
+                            or "file"
+                        )
                         abm.message.append(File(name=file_name, url=m["data"]["url"]))
                     else:
                         try:
@@ -265,7 +272,14 @@ class AiocqhttpAdapter(Platform):
                                 )
                             if ret and "url" in ret:
                                 file_url = ret["url"]  # https
-                                a = File(name="", url=file_url)
+                                # 优先从 API 返回值获取文件名，其次从原始消息数据获取
+                                file_name = (
+                                    ret.get("file_name", "")
+                                    or ret.get("name", "")
+                                    or m["data"].get("file", "")
+                                    or m["data"].get("file_name", "")
+                                )
+                                a = File(name=file_name, url=file_url)
                                 abm.message.append(a)
                             else:
                                 logger.error(f"获取文件失败: {ret}")

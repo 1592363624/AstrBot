@@ -111,9 +111,9 @@ class ProviderGoogleGenAI(Provider):
                 f"检测到 Key 异常({e.message})，且已没有可用的 Key。 当前 Key: {self.chosen_api_key[:12]}...",
             )
             raise Exception("达到了 Gemini 速率限制, 请稍后再试...")
-        logger.error(
-            f"发生了错误(gemini_source)。Provider 配置如下: {self.provider_config}",
-        )
+        # logger.error(
+        #     f"发生了错误(gemini_source)。Provider 配置如下: {self.provider_config}",
+        # )
         raise e
 
     async def _prepare_query_config(
@@ -299,7 +299,7 @@ class ProviderGoogleGenAI(Provider):
                         # we should set thought_signature back to part if exists
                         # for more info about thought_signature, see:
                         # https://ai.google.dev/gemini-api/docs/thought-signatures
-                        if "extra_content" in tool:
+                        if "extra_content" in tool and tool["extra_content"]:
                             ts_bs64 = (
                                 tool["extra_content"]
                                 .get("google", {})

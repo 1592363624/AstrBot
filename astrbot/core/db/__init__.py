@@ -13,6 +13,7 @@ from astrbot.core.db.po import (
     ConversationV2,
     Persona,
     PlatformMessageHistory,
+    PlatformSession,
     PlatformStat,
     Preference,
     Stats,
@@ -172,7 +173,7 @@ class BaseDatabase(abc.ABC):
         content: dict,
         sender_id: str | None = None,
         sender_name: str | None = None,
-    ) -> None:
+    ) -> PlatformMessageHistory:
         """Insert a new platform message history record."""
         ...
 
@@ -183,7 +184,7 @@ class BaseDatabase(abc.ABC):
         user_id: str,
         offset_sec: int = 86400,
     ) -> None:
-        """Delete platform message history records older than the specified offset."""
+        """Delete platform message history records newer than the specified offset."""
         ...
 
     @abc.abstractmethod
@@ -195,6 +196,14 @@ class BaseDatabase(abc.ABC):
         page_size: int = 20,
     ) -> list[PlatformMessageHistory]:
         """Get platform message history for a specific user."""
+        ...
+
+    @abc.abstractmethod
+    async def get_platform_message_history_by_id(
+        self,
+        message_id: int,
+    ) -> PlatformMessageHistory | None:
+        """Get a platform message history record by its ID."""
         ...
 
     @abc.abstractmethod
@@ -210,6 +219,27 @@ class BaseDatabase(abc.ABC):
     @abc.abstractmethod
     async def get_attachment_by_id(self, attachment_id: str) -> Attachment:
         """Get an attachment by its ID."""
+        ...
+
+    @abc.abstractmethod
+    async def get_attachments(self, attachment_ids: list[str]) -> list[Attachment]:
+        """Get multiple attachments by their IDs."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_attachment(self, attachment_id: str) -> bool:
+        """Delete an attachment by its ID.
+
+        Returns True if the attachment was deleted, False if it was not found.
+        """
+        ...
+
+    @abc.abstractmethod
+    async def delete_attachments(self, attachment_ids: list[str]) -> int:
+        """Delete multiple attachments by their IDs.
+
+        Returns the number of attachments deleted.
+        """
         ...
 
     @abc.abstractmethod
@@ -312,4 +342,52 @@ class BaseDatabase(abc.ABC):
         platform: str | None = None,
     ) -> tuple[list[dict], int]:
         """Get paginated session conversations with joined conversation and persona details, support search and platform filter."""
+        ...
+
+    # ====
+    # Platform Session Management
+    # ====
+
+    @abc.abstractmethod
+    async def create_platform_session(
+        self,
+        creator: str,
+        platform_id: str = "webchat",
+        session_id: str | None = None,
+        display_name: str | None = None,
+        is_group: int = 0,
+    ) -> PlatformSession:
+        """Create a new Platform session."""
+        ...
+
+    @abc.abstractmethod
+    async def get_platform_session_by_id(
+        self, session_id: str
+    ) -> PlatformSession | None:
+        """Get a Platform session by its ID."""
+        ...
+
+    @abc.abstractmethod
+    async def get_platform_sessions_by_creator(
+        self,
+        creator: str,
+        platform_id: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[PlatformSession]:
+        """Get all Platform sessions for a specific creator (username) and optionally platform."""
+        ...
+
+    @abc.abstractmethod
+    async def update_platform_session(
+        self,
+        session_id: str,
+        display_name: str | None = None,
+    ) -> None:
+        """Update a Platform session's updated_at timestamp and optionally display_name."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_platform_session(self, session_id: str) -> None:
+        """Delete a Platform session by its ID."""
         ...

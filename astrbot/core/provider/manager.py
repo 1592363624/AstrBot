@@ -1,7 +1,7 @@
 import asyncio
 import traceback
 
-from astrbot.core import logger, sp
+from astrbot.core import astrbot_config, logger, sp
 from astrbot.core.astrbot_config_mgr import AstrBotConfigManager
 from astrbot.core.db import BaseDatabase
 
@@ -24,6 +24,7 @@ class ProviderManager:
         db_helper: BaseDatabase,
         persona_mgr: PersonaManager,
     ):
+        self.reload_lock = asyncio.Lock()
         self.persona_mgr = persona_mgr
         self.acm = acm
         config = acm.confs["default"]
@@ -226,6 +227,9 @@ class ProviderManager:
 
     async def load_provider(self, provider_config: dict):
         if not provider_config["enable"]:
+            logger.info(f"Provider {provider_config['id']} is disabled, skipping")
+            return
+        if provider_config.get("provider_type", "") == "agent_runner":
             return
 
         logger.info(
@@ -246,14 +250,6 @@ class ProviderManager:
                 case "anthropic_chat_completion":
                     from .sources.anthropic_source import (
                         ProviderAnthropic as ProviderAnthropic,
-                    )
-                case "dify":
-                    from .sources.dify_source import ProviderDify as ProviderDify
-                case "coze":
-                    from .sources.coze_source import ProviderCoze as ProviderCoze
-                case "dashscope":
-                    from .sources.dashscope_source import (
-                        ProviderDashscope as ProviderDashscope,
                     )
                 case "googlegenai_chat_completion":
                     from .sources.gemini_source import (
@@ -330,6 +326,10 @@ class ProviderManager:
                 case "xinference_rerank":
                     from .sources.xinference_rerank_source import (
                         XinferenceRerankProvider as XinferenceRerankProvider,
+                    )
+                case "bailian_rerank":
+                    from .sources.bailian_rerank_source import (
+                        BailianRerankProvider as BailianRerankProvider,
                     )
         except (ImportError, ModuleNotFoundError) as e:
             logger.critical(
@@ -436,40 +436,46 @@ class ProviderManager:
             )
 
     async def reload(self, provider_config: dict):
-        await self.terminate_provider(provider_config["id"])
-        if provider_config["enable"]:
-            await self.load_provider(provider_config)
+        async with self.reload_lock:
+            await self.terminate_provider(provider_config["id"])
+            if provider_config["enable"]:
+                await self.load_provider(provider_config)
 
-        # 和配置文件保持同步
-        config_ids = [provider["id"] for provider in self.providers_config]
-        logger.debug(f"providers in user's config: {config_ids}")
-        for key in list(self.inst_map.keys()):
-            if key not in config_ids:
-                await self.terminate_provider(key)
+            # 和配置文件保持同步
+            self.providers_config = astrbot_config["provider"]
+            config_ids = [provider["id"] for provider in self.providers_config]
+            logger.info(f"providers in user's config: {config_ids}")
+            for key in list(self.inst_map.keys()):
+                if key not in config_ids:
+                    await self.terminate_provider(key)
 
-        if len(self.provider_insts) == 0:
-            self.curr_provider_inst = None
-        elif self.curr_provider_inst is None and len(self.provider_insts) > 0:
-            self.curr_provider_inst = self.provider_insts[0]
-            logger.info(
-                f"自动选择 {self.curr_provider_inst.meta().id} 作为当前提供商适配器。",
-            )
+            if len(self.provider_insts) == 0:
+                self.curr_provider_inst = None
+            elif self.curr_provider_inst is None and len(self.provider_insts) > 0:
+                self.curr_provider_inst = self.provider_insts[0]
+                logger.info(
+                    f"自动选择 {self.curr_provider_inst.meta().id} 作为当前提供商适配器。",
+                )
 
-        if len(self.stt_provider_insts) == 0:
-            self.curr_stt_provider_inst = None
-        elif self.curr_stt_provider_inst is None and len(self.stt_provider_insts) > 0:
-            self.curr_stt_provider_inst = self.stt_provider_insts[0]
-            logger.info(
-                f"自动选择 {self.curr_stt_provider_inst.meta().id} 作为当前语音转文本提供商适配器。",
-            )
+            if len(self.stt_provider_insts) == 0:
+                self.curr_stt_provider_inst = None
+            elif (
+                self.curr_stt_provider_inst is None and len(self.stt_provider_insts) > 0
+            ):
+                self.curr_stt_provider_inst = self.stt_provider_insts[0]
+                logger.info(
+                    f"自动选择 {self.curr_stt_provider_inst.meta().id} 作为当前语音转文本提供商适配器。",
+                )
 
-        if len(self.tts_provider_insts) == 0:
-            self.curr_tts_provider_inst = None
-        elif self.curr_tts_provider_inst is None and len(self.tts_provider_insts) > 0:
-            self.curr_tts_provider_inst = self.tts_provider_insts[0]
-            logger.info(
-                f"自动选择 {self.curr_tts_provider_inst.meta().id} 作为当前文本转语音提供商适配器。",
-            )
+            if len(self.tts_provider_insts) == 0:
+                self.curr_tts_provider_inst = None
+            elif (
+                self.curr_tts_provider_inst is None and len(self.tts_provider_insts) > 0
+            ):
+                self.curr_tts_provider_inst = self.tts_provider_insts[0]
+                logger.info(
+                    f"自动选择 {self.curr_tts_provider_inst.meta().id} 作为当前文本转语音提供商适配器。",
+                )
 
     def get_insts(self):
         return self.provider_insts

@@ -9,6 +9,7 @@ import axios from 'axios';
 import { pinyin } from 'pinyin-pro';
 import { useCommonStore } from '@/stores/common';
 import { useI18n, useModuleI18n } from '@/i18n/composables';
+import defaultPluginIcon from '@/assets/images/plugin_icon.png';
 
 import { ref, computed, onMounted, reactive, inject, watch } from 'vue';
 
@@ -41,6 +42,7 @@ const loadingDialog = reactive({
 const showPluginInfoDialog = ref(false);
 const selectedPlugin = ref({});
 const curr_namespace = ref("");
+const updatingAll = ref(false);
 
 const readmeDialog = reactive({
   show: false,
@@ -136,10 +138,11 @@ const pluginMarketHeaders = computed(() => [
 
 // 过滤要显示的插件
 const filteredExtensions = computed(() => {
+  const data = Array.isArray(extension_data?.data) ? extension_data.data : [];
   if (!showReserved.value) {
-    return extension_data?.data?.filter(ext => !ext.reserved) || [];
+    return data.filter(ext => !ext.reserved);
   }
-  return extension_data.data || [];
+  return data;
 });
 
 // 通过搜索过滤插件
@@ -225,6 +228,10 @@ const paginatedPlugins = computed(() => {
   return sortedPlugins.value.slice(start, end);
 });
 
+const updatableExtensions = computed(() => {
+  return extension_data?.data?.filter(ext => ext.has_update) || [];
+});
+
 // 方法
 const toggleShowReserved = () => {
   showReserved.value = !showReserved.value;
@@ -274,7 +281,8 @@ const checkUpdate = () => {
     onlinePluginsNameMap.set(plugin.name, plugin);
   });
 
-  extension_data.data.forEach(extension => {
+  const data = Array.isArray(extension_data?.data) ? extension_data.data : [];
+  data.forEach(extension => {
     const repoKey = extension.repo?.toLowerCase();
     const onlinePlugin = repoKey ? onlinePluginsMap.get(repoKey) : null;
     const onlinePluginByName = onlinePluginsNameMap.get(extension.name);
@@ -368,6 +376,56 @@ const updateExtension = async (extension_name) => {
     }, 1000);
   } catch (err) {
     toast(err, "error");
+  }
+};
+
+const updateAllExtensions = async () => {
+  if (updatingAll.value || updatableExtensions.value.length === 0) return;
+  updatingAll.value = true;
+  loadingDialog.title = tm('status.loading');
+  loadingDialog.statusCode = 0;
+  loadingDialog.result = "";
+  loadingDialog.show = true;
+
+  const targets = updatableExtensions.value.map(ext => ext.name);
+  try {
+    const res = await axios.post('/api/plugin/update-all', {
+      names: targets,
+      proxy: localStorage.getItem('selectedGitHubProxy') || ""
+    });
+
+    if (res.data.status === "error") {
+      onLoadingDialogResult(2, res.data.message || tm('messages.updateAllFailed', {
+        failed: targets.length,
+        total: targets.length
+      }), -1);
+      return;
+    }
+
+    const results = res.data.data?.results || [];
+    const failures = results.filter(r => r.status !== 'ok');
+    try {
+      await getExtensions();
+    } catch (err) {
+      const errorMsg = err.response?.data?.message || err.message || String(err);
+      failures.push({ name: 'refresh', status: 'error', message: errorMsg });
+    }
+
+    if (failures.length === 0) {
+      onLoadingDialogResult(1, tm('messages.updateAllSuccess'));
+    } else {
+      const failureText = tm('messages.updateAllFailed', {
+        failed: failures.length,
+        total: targets.length
+      });
+      const detail = failures.map(f => `${f.name}: ${f.message}`).join('\n');
+      onLoadingDialogResult(2, `${failureText}\n${detail}`, -1);
+    }
+  } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message || String(err);
+    onLoadingDialogResult(2, errorMsg, -1);
+  } finally {
+    updatingAll.value = false;
   }
 };
 
@@ -506,8 +564,9 @@ const trimExtensionName = () => {
 };
 
 const checkAlreadyInstalled = () => {
-  const installedRepos = new Set(extension_data.data.map(ext => ext.repo?.toLowerCase()));
-  const installedNames = new Set(extension_data.data.map(ext => ext.name));
+  const data = Array.isArray(extension_data?.data) ? extension_data.data : [];
+  const installedRepos = new Set(data.map(ext => ext.repo?.toLowerCase()));
+  const installedNames = new Set(data.map(ext => ext.name));
 
   for (let i = 0; i < pluginMarketData.value.length; i++) {
     const plugin = pluginMarketData.value[i];
@@ -717,6 +776,12 @@ watch(marketSearch, (newVal) => {
                 <v-btn class="ml-2" variant="tonal" @click="toggleShowReserved">
                   <v-icon>{{ showReserved ? 'mdi-eye-off' : 'mdi-eye' }}</v-icon>
                   {{ showReserved ? tm('buttons.hideSystemPlugins') : tm('buttons.showSystemPlugins') }}
+                </v-btn>
+
+                <v-btn class="ml-2" color="warning" variant="tonal" :disabled="updatableExtensions.length === 0"
+                  :loading="updatingAll" @click="updateAllExtensions">
+                  <v-icon>mdi-update</v-icon>
+                  {{ tm('buttons.updateAll') }}
                 </v-btn>
 
                 <v-btn class="ml-2" color="primary" variant="tonal" @click="dialog = true">
@@ -939,7 +1004,7 @@ watch(marketSearch, (newVal) => {
 
               <v-row style="min-height: 26rem;">
                 <v-col v-for="plugin in paginatedPlugins" :key="plugin.name" cols="12" md="6" lg="4">
-                  <v-card class="rounded-lg d-flex flex-column" elevation="0"
+                  <v-card class="rounded-lg d-flex flex-column plugin-card" elevation="0"
                     style=" height: 12rem; position: relative;">
 
                     <!-- 推荐标记 -->
@@ -950,8 +1015,8 @@ watch(marketSearch, (newVal) => {
 
                     <v-card-text
                       style="padding: 12px; padding-bottom: 8px; display: flex; gap: 12px; width: 100%; flex: 1; overflow: hidden;">
-                      <div v-if="plugin?.logo" style="flex-shrink: 0;">
-                        <img :src="plugin.logo" :alt="plugin.name"
+                      <div style="flex-shrink: 0;">
+                        <img :src="plugin?.logo || defaultPluginIcon" :alt="plugin.name"
                           style="height: 75px; width: 75px; border-radius: 8px; object-fit: cover;" />
                       </div>
 
@@ -986,8 +1051,7 @@ watch(marketSearch, (newVal) => {
                         </div>
 
                         <!-- Description -->
-                        <div class="text-caption"
-                          style="overflow: scroll; color: rgba(var(--v-theme-on-surface), 0.6); line-height: 1.3; margin-bottom: 6px; flex: 1;">
+                        <div class="text-caption plugin-description">
                           {{ plugin.desc }}
                         </div>
 
@@ -1245,5 +1309,37 @@ watch(marketSearch, (newVal) => {
   padding: 5px;
   border-radius: 5px;
   background-color: #f5f5f5;
+}
+
+.plugin-description {
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  line-height: 1.3;
+  margin-bottom: 6px;
+  flex: 1;
+  overflow-y: hidden;
+}
+
+.plugin-card:hover .plugin-description {
+  overflow-y: auto;
+}
+
+.plugin-description::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.plugin-description::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.plugin-description::-webkit-scrollbar-thumb {
+  background-color: rgba(var(--v-theme-primary-rgb), 0.4);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.plugin-description::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(var(--v-theme-primary-rgb), 0.6);
 }
 </style>
