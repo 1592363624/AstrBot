@@ -1,7 +1,7 @@
 import abc
 import uuid
 from asyncio import Queue
-from collections.abc import Awaitable
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -80,6 +80,13 @@ class Platform(abc.ABC):
         if self._status == PlatformStatus.ERROR:
             self._status = PlatformStatus.RUNNING
 
+    def unified_webhook(self) -> bool:
+        """是否正在使用统一 Webhook 模式"""
+        return bool(
+            self.config.get("unified_webhook_mode", False)
+            and self.config.get("webhook_uuid")
+        )
+
     def get_stats(self) -> dict:
         """获取平台统计信息"""
         meta = self.meta()
@@ -97,10 +104,11 @@ class Platform(abc.ABC):
             }
             if self.last_error
             else None,
+            "unified_webhook": self.unified_webhook(),
         }
 
     @abc.abstractmethod
-    def run(self) -> Awaitable[Any]:
+    def run(self) -> Coroutine[Any, Any, None]:
         """得到一个平台的运行实例，需要返回一个协程对象。"""
         raise NotImplementedError
 
@@ -116,7 +124,7 @@ class Platform(abc.ABC):
         self,
         session: MessageSesion,
         message_chain: MessageChain,
-    ):
+    ) -> None:
         """通过会话发送消息。该方法旨在让插件能够直接通过**可持久化的会话数据**发送消息，而不需要保存 event 对象。
 
         异步方法。

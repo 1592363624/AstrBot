@@ -50,4 +50,3 @@ venv/*
 pytest.ini
 AGENTS.md
 IFLOW.md
-/.trae/
