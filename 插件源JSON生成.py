@@ -396,6 +396,59 @@ def save_json(data: Any, output_path: Path) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def load_existing_registry(output_path: Path) -> Dict[str, Dict[str, Any]]:
+    if not output_path.exists():
+        return {}
+    try:
+        with output_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    existing: Dict[str, Dict[str, Any]] = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            existing[str(key)] = value
+    return existing
+
+
+def diff_registries(
+    old: Dict[str, Dict[str, Any]],
+    new: Dict[str, Dict[str, Any]],
+) -> Tuple[
+    Dict[str, Dict[str, Any]],
+    Dict[str, Dict[str, Any]],
+    Dict[str, Dict[str, Tuple[Any, Any]]],
+]:
+    added: Dict[str, Dict[str, Any]] = {}
+    removed: Dict[str, Dict[str, Any]] = {}
+    updated: Dict[str, Dict[str, Tuple[Any, Any]]] = {}
+
+    for name, entry in new.items():
+        if name not in old:
+            added[name] = entry
+            continue
+        old_entry = old[name]
+        if old_entry == entry:
+            continue
+        field_changes: Dict[str, Tuple[Any, Any]] = {}
+        keys = set(old_entry.keys()) | set(entry.keys())
+        for key in keys:
+            old_value = old_entry.get(key)
+            new_value = entry.get(key)
+            if old_value != new_value:
+                field_changes[key] = (old_value, new_value)
+        if field_changes:
+            updated[name] = field_changes
+
+    for name, entry in old.items():
+        if name not in new:
+            removed[name] = entry
+
+    return added, removed, updated
+
+
 def parse_args() -> argparse.Namespace:
     """
     解析命令行参数。
@@ -475,6 +528,8 @@ def main() -> None:
     print(f"注册表输出文件: {output_path}")
     print(f"MD5 输出文件: {md5_output_path}")
 
+    existing_registry = load_existing_registry(output_path)
+
     registry = collect_installed_plugins(plugin_dir)
 
     if not registry:
@@ -482,8 +537,32 @@ def main() -> None:
 
     update_registry_from_github(registry)
 
+    added, removed, updated = diff_registries(existing_registry, registry)
+
     save_json(registry, output_path)
     print(f"已生成插件注册表 JSON，包含 {len(registry)} 个插件。")
+
+    if not existing_registry:
+        print("未检测到已有注册表文件，视为首次生成。")
+    else:
+        if not added and not removed and not updated:
+            print("本次生成与已有注册表内容一致，未检测到插件变更。")
+        else:
+            print("插件变更详情：")
+            for name, entry in added.items():
+                version = entry.get("version", "")
+                print(f"  [新增] {name} 版本 {version}")
+            for name, entry in removed.items():
+                version = entry.get("version", "")
+                print(f"  [移除] {name} 原版本 {version}")
+            for name, fields in updated.items():
+                version_old, version_new = fields.get("version", ("", ""))
+                if version_old != version_new:
+                    print(
+                        f"  [更新] {name} 版本 {version_old} -> {version_new}",
+                    )
+                else:
+                    print(f"  [变更] {name} 元数据发生更新")
 
     # 计算并保存 MD5 JSON
     md5_value = compute_registry_md5(registry)
