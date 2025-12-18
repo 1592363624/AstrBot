@@ -50,3 +50,6 @@ venv/*
 pytest.ini
 AGENTS.md
 IFLOW.md
+
+!data\plugins\astrbot_plugin_re_xiuxian
+!data\plugins\astrbot_plugin_steam_status_monitor_shell
