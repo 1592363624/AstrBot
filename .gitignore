@@ -50,6 +50,4 @@ venv/*
 pytest.ini
 AGENTS.md
 IFLOW.md
-App-Store
-
-
+App-Store/
