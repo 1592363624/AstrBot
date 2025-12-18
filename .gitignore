@@ -19,6 +19,7 @@ cookies.json
 # Data files
 data_v2.db
 data_v3.db
+data/
 configs/session
 configs/config.yaml
 cmd_config.json
@@ -52,11 +53,3 @@ IFLOW.md
 
 
 
-data/*
-# 保留data/plugins目录（否则plugins会被上面的data/*忽略）
-!data/plugins/
-# 忽略data/plugins下的所有内容（为后续否定做铺垫）
-data/plugins/*
-# 否定：不忽略这两个特定文件夹
-!data/plugins/astrbot_plugin_re_xiuxian/
-!data/plugins/astrbot_plugin_steam_status_monitor_shell/
