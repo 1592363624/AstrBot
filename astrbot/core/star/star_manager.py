@@ -23,6 +23,7 @@ from astrbot.core.utils.astrbot_path import (
 from astrbot.core.utils.io import remove_dir
 
 from . import StarMetadata
+from .command_management import sync_command_configs
 from .context import Context
 from .filter.permission import PermissionType, PermissionTypeFilter
 from .star import star_map, star_registry
@@ -630,6 +631,11 @@ class PluginManager:
         # 清除 pip.main 导致的多余的 logging handlers
         for handler in logging.root.handlers[:]:
             logging.root.removeHandler(handler)
+        try:
+            await sync_command_configs()
+        except Exception as e:
+            logger.error(f"同步指令配置失败: {e!s}")
+            logger.error(traceback.format_exc())
 
         if not fail_rec:
             return True, None

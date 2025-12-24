@@ -19,7 +19,7 @@ cookies.json
 # Data files
 data_v2.db
 data_v3.db
-data/
+data
 configs/session
 configs/config.yaml
 cmd_config.json
@@ -50,4 +50,3 @@ venv/*
 pytest.ini
 AGENTS.md
 IFLOW.md
-App-Store/
