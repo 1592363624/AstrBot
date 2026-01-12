@@ -17,8 +17,6 @@
         },
         ...
     }
-- 计算该 JSON 内容的 MD5，并生成配套的 MD5 JSON 文件：
-    {"md5": "<hex_md5>"}
 
 使用方式示例：
 1. 在 AstrBot 根目录执行（自动使用 data/plugins）：
@@ -26,8 +24,7 @@
 
 2. 指定输出文件路径：
     python tools/generate_plugin_registry.py \
-        --output plugins_custom.json \
-        --md5-output plugins_custom-md5.json
+        --output plugins_custom.json
 
 3. 指定插件目录（如果你有单独的插件集合）：
     python tools/generate_plugin_registry.py \
@@ -35,7 +32,6 @@
 """
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -51,8 +47,6 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_path
 # 默认配置变量，便于根据实际环境调整
 # 生成的插件市场 JSON 默认输出到 App-Store/admin/plugins.json
 DEFAULT_REGISTRY_OUTPUT: str = "App-Store/admin/plugins.json"
-# 对应的 MD5 文件默认输出到同一目录下
-DEFAULT_MD5_OUTPUT: str = "App-Store/admin/plugins_md5.json"
 
 # GitHub 相关配置
 GITHUB_API_BASE: str = "https://api.github.com"
@@ -351,31 +345,7 @@ def update_registry_from_github(registry: Dict[str, Dict[str, Any]]) -> None:
         client.close()
 
 
-def compute_registry_md5(registry: Dict[str, Dict[str, Any]]) -> str:
-    """
-    计算插件注册表字典内容的 MD5 值。
 
-    为了确保不同环境下 MD5 一致性：
-    - 使用 json.dumps 时指定 sort_keys=True 和 separators 选项，
-      保证键的顺序和缩进一致。
-    - 使用 UTF-8 编码将字符串转换为字节，再计算 MD5。
-
-    Args:
-        registry: 插件注册表字典。
-
-    Returns:
-        str: 32 位十六进制 MD5 字符串。
-    """
-    # 将字典序列化为稳定的 JSON 字符串
-    registry_json = json.dumps(
-        registry,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    md5 = hashlib.md5()
-    md5.update(registry_json.encode("utf-8"))
-    return md5.hexdigest()
 
 
 def save_json(data: Any, output_path: Path) -> None:
@@ -456,13 +426,14 @@ def parse_args() -> argparse.Namespace:
     支持：
     - --plugin-dir：插件目录，默认使用 AstrBot 的 data/plugins。
     - --output：注册表 JSON 输出路径，默认 plugins_custom.json。
-    - --md5-output：MD5 JSON 输出路径，默认 plugins_custom-md5.json。
+
+
 
     Returns:
         argparse.Namespace: 解析后的参数对象。
     """
     parser = argparse.ArgumentParser(
-        description="从当前 AstrBot 插件列表生成自定义插件源 JSON 与 MD5 文件。",
+        description="从当前 AstrBot 插件列表生成自定义插件源 JSON 文件。",
     )
     parser.add_argument(
         "--plugin-dir",
@@ -475,12 +446,6 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=DEFAULT_REGISTRY_OUTPUT,
         help="插件注册表 JSON 输出路径，默认为 ./plugins_custom.json。",
-    )
-    parser.add_argument(
-        "--md5-output",
-        type=str,
-        default=DEFAULT_MD5_OUTPUT,
-        help="插件注册表 MD5 JSON 输出路径，默认为 ./plugins_custom-md5.json。",
     )
     return parser.parse_args()
 
@@ -515,18 +480,15 @@ def main() -> None:
     1. 解析命令行参数，确定插件目录与输出路径。
     2. 收集插件元数据，生成注册表字典。
     3. 将注册表写入 JSON 文件。
-    4. 计算注册表的 MD5，并写入 MD5 JSON 文件。
-    5. 在控制台打印简单的执行结果，方便确认。
+    4. 在控制台打印简单的执行结果，方便确认。
     """
     args = parse_args()
 
     plugin_dir = resolve_plugin_dir(args.plugin_dir)
     output_path = Path(args.output).expanduser().resolve()
-    md5_output_path = Path(args.md5_output).expanduser().resolve()
 
     print(f"使用插件目录: {plugin_dir}")
     print(f"注册表输出文件: {output_path}")
-    print(f"MD5 输出文件: {md5_output_path}")
 
     existing_registry = load_existing_registry(output_path)
 
@@ -563,12 +525,6 @@ def main() -> None:
                     )
                 else:
                     print(f"  [变更] {name} 元数据发生更新")
-
-    # 计算并保存 MD5 JSON
-    md5_value = compute_registry_md5(registry)
-    md5_data = {"md5": md5_value}
-    save_json(md5_data, md5_output_path)
-    print(f"已生成 MD5 JSON，MD5 = {md5_value}")
 
 
 if __name__ == "__main__":

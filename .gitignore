@@ -9,7 +9,7 @@ uv.lock
 # IDE and editors
 .vscode
 .idea
-
+.trae/documents
 # Logs and temporary files
 botpy.log
 logs/
