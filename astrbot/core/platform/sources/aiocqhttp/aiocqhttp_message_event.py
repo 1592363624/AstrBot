@@ -6,6 +6,7 @@ from aiocqhttp import CQHttp, Event
 
 from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api.message_components import (
+    At,
     BaseMessageComponent,
     File,
     Image,
@@ -26,14 +27,14 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
         platform_meta,
         session_id,
         bot: CQHttp,
-    ):
+    ) -> None:
         super().__init__(message_str, message_obj, platform_meta, session_id)
         self.bot = bot
 
     @staticmethod
     async def _from_segment_to_dict(segment: BaseMessageComponent) -> dict:
         """修复部分字段"""
-        if isinstance(segment, (Image, Record)):
+        if isinstance(segment, Image | Record):
             # For Image and Record segments, we convert them to base64
             bs64 = await segment.convert_to_base64()
             return {
@@ -45,6 +46,19 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
         if isinstance(segment, File):
             # For File segments, we need to handle the file differently
             d = await segment.to_dict()
+            file_val = d.get("data", {}).get("file", "")
+            if file_val:
+                import pathlib
+
+                try:
+                    # 使用 pathlib 处理路径，能更好地处理 Windows/Linux 差异
+                    path_obj = pathlib.Path(file_val)
+                    # 如果是绝对路径且不包含协议头 (://)，则转换为标准的 file: URI
+                    if path_obj.is_absolute() and "://" not in file_val:
+                        d["data"]["file"] = path_obj.as_uri()
+                except Exception:
+                    # 如果不是合法路径（例如已经是特定的特殊字符串），则跳过转换
+                    pass
             return d
         if isinstance(segment, Video):
             d = await segment.to_dict()
@@ -57,11 +71,19 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
         """解析成 OneBot json 格式"""
         ret = []
         for segment in message_chain.chain:
-            if isinstance(segment, Plain):
+            if isinstance(segment, At):
+                # At 组件后插入一个空格，避免与后续文本粘连
+                d = await AiocqhttpMessageEvent._from_segment_to_dict(segment)
+                ret.append(d)
+                ret.append({"type": "text", "data": {"text": " "}})
+            elif isinstance(segment, Plain):
                 if not segment.text.strip():
                     continue
-            d = await AiocqhttpMessageEvent._from_segment_to_dict(segment)
-            ret.append(d)
+                d = await AiocqhttpMessageEvent._from_segment_to_dict(segment)
+                ret.append(d)
+            else:
+                d = await AiocqhttpMessageEvent._from_segment_to_dict(segment)
+                ret.append(d)
         return ret
 
     @classmethod
@@ -72,7 +94,7 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
         is_group: bool,
         session_id: str | None,
         messages: list[dict],
-    ):
+    ) -> None:
         # session_id 必须是纯数字字符串
         session_id_int = (
             int(session_id) if session_id and session_id.isdigit() else None
@@ -97,7 +119,7 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
         event: Event | None = None,
         is_group: bool = False,
         session_id: str | None = None,
-    ):
+    ) -> None:
         """发送消息至 QQ 协议端（aiocqhttp）。
 
         Args:
@@ -110,7 +132,7 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
         """
         # 转发消息、文件消息不能和普通消息混在一起发送
         send_one_by_one = any(
-            isinstance(seg, (Node, Nodes, File)) for seg in message_chain.chain
+            isinstance(seg, Node | Nodes | File) for seg in message_chain.chain
         )
         if not send_one_by_one:
             ret = await cls._parse_onebot_json(message_chain)
@@ -119,7 +141,7 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
             await cls._dispatch_send(bot, event, is_group, session_id, ret)
             return
         for seg in message_chain.chain:
-            if isinstance(seg, (Node, Nodes)):
+            if isinstance(seg, Node | Nodes):
                 # 合并转发消息
                 if isinstance(seg, Node):
                     nodes = Nodes([seg])
@@ -143,7 +165,7 @@ class AiocqhttpMessageEvent(AstrMessageEvent):
                 await cls._dispatch_send(bot, event, is_group, session_id, messages)
                 await asyncio.sleep(0.5)
 
-    async def send(self, message: MessageChain):
+    async def send(self, message: MessageChain) -> None:
         """发送消息"""
         event = getattr(self.message_obj, "raw_message", None)
 

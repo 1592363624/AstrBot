@@ -73,7 +73,7 @@ class SatoriPlatformAdapter(Platform):
         self,
         session: MessageSession,
         message_chain: MessageChain,
-    ):
+    ) -> None:
         from .satori_event import SatoriPlatformEvent
 
         await SatoriPlatformEvent.send_with_adapter(
@@ -99,7 +99,7 @@ class SatoriPlatformAdapter(Platform):
         except AttributeError:
             return False
 
-    async def run(self):
+    async def run(self) -> None:
         self.running = True
         self.session = ClientSession(timeout=ClientTimeout(total=30))
 
@@ -133,7 +133,7 @@ class SatoriPlatformAdapter(Platform):
         if self.session:
             await self.session.close()
 
-    async def connect_websocket(self):
+    async def connect_websocket(self) -> None:
         logger.info(f"Satori 适配器正在连接到 WebSocket: {self.endpoint}")
         logger.info(f"Satori 适配器 HTTP API 地址: {self.api_base_url}")
 
@@ -142,7 +142,12 @@ class SatoriPlatformAdapter(Platform):
             raise ValueError(f"WebSocket URL必须以ws://或wss://开头: {self.endpoint}")
 
         try:
-            websocket = await connect(self.endpoint, additional_headers={})
+            websocket = await connect(
+                self.endpoint,
+                additional_headers={},
+                max_size=10 * 1024 * 1024,  # 10MB
+            )
+
             self.ws = websocket
 
             await asyncio.sleep(0.1)
@@ -176,7 +181,7 @@ class SatoriPlatformAdapter(Platform):
                 except Exception as e:
                     logger.error(f"Satori WebSocket 关闭异常: {e}")
 
-    async def send_identify(self):
+    async def send_identify(self) -> None:
         if not self.ws:
             raise Exception("WebSocket连接未建立")
 
@@ -204,7 +209,7 @@ class SatoriPlatformAdapter(Platform):
             logger.error(f"发送 IDENTIFY 信令失败: {e}")
             raise
 
-    async def heartbeat_loop(self):
+    async def heartbeat_loop(self) -> None:
         try:
             while self.running and self.ws:
                 await asyncio.sleep(self.heartbeat_interval)
@@ -229,7 +234,7 @@ class SatoriPlatformAdapter(Platform):
         except Exception as e:
             logger.error(f"心跳任务异常: {e}")
 
-    async def handle_message(self, message: str):
+    async def handle_message(self, message: str) -> None:
         try:
             data = json.loads(message)
             op = data.get("op")
@@ -270,7 +275,7 @@ class SatoriPlatformAdapter(Platform):
         except Exception as e:
             logger.error(f"处理 WebSocket 消息异常: {e}")
 
-    async def handle_event(self, event_data: dict):
+    async def handle_event(self, event_data: dict) -> None:
         try:
             event_type = event_data.get("type")
             sn = event_data.get("sn")
@@ -715,7 +720,7 @@ class SatoriPlatformAdapter(Platform):
             if child.tail and child.tail.strip():
                 elements.append(Plain(text=child.tail))
 
-    async def handle_msg(self, message: AstrBotMessage):
+    async def handle_msg(self, message: AstrBotMessage) -> None:
         from .satori_event import SatoriPlatformEvent
 
         message_event = SatoriPlatformEvent(
@@ -775,7 +780,7 @@ class SatoriPlatformAdapter(Platform):
             logger.error(f"Satori HTTP 请求异常: {e}")
             return {}
 
-    async def terminate(self):
+    async def terminate(self) -> None:
         self.running = False
 
         if self.heartbeat_task:

@@ -1,8 +1,7 @@
 import { defineStore } from 'pinia';
 import axios from 'axios';
 
-export const useCommonStore = defineStore({
-  id: 'common',
+export const useCommonStore = defineStore("common", {
   state: () => ({
     // @ts-ignore
     eventSource: null,
@@ -21,10 +20,14 @@ export const useCommonStore = defineStore({
       }
       const controller = new AbortController();
       const { signal } = controller;
+      
+      // 注意：这里如果之前改过 Polyfill 的话，可能需要保持原样
+      // 如果是用 fetch 的话，这里是支持 Authorization Header 的
       const headers = {
         'Content-Type': 'multipart/form-data',
         'Authorization': 'Bearer ' + localStorage.getItem('token')
       };
+      
       fetch('/api/live-log', {
         method: 'GET',
         headers,
@@ -72,10 +75,20 @@ export const useCommonStore = defineStore({
 
             try {
               const logObject = JSON.parse(logLine);
-              // give a uuid if not exists
+              
+              // 修复：兼容 HTTP 环境的 UUID 生成 
               if (!logObject.uuid) {
-                logObject.uuid = crypto.randomUUID();
+                 if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+                    logObject.uuid = crypto.randomUUID();
+                 } else {
+                    // 手动生成 UUID v4
+                    logObject.uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                        return v.toString(16);
+                    });
+                 }
               }
+
               this.log_cache.push(logObject);
               // Limit log cache size
               if (this.log_cache.length > this.log_cache_max_len) {
@@ -93,7 +106,13 @@ export const useCommonStore = defineStore({
       }).catch(error => {
         console.error('SSE error:', error);
         // Attempt to reconnect after a delay
-        this.log_cache.push('SSE Connection failed, retrying in 5 seconds...');
+        this.log_cache.push({
+            type: 'log',
+            level: 'ERROR',
+            time: Date.now() / 1000,
+            data: 'SSE Connection failed, retrying in 5 seconds...',
+            uuid: 'error-' + Date.now() 
+        });
         setTimeout(() => {
           this.eventSource = null;
           this.createEventSource();
@@ -112,13 +131,17 @@ export const useCommonStore = defineStore({
     getLogCache() {
       return this.log_cache
     },
+    async fetchStartTime() {
+      const res = await axios.get('/api/stat/start-time');
+      this.startTime = res.data.data.start_time;
+      return this.startTime;
+    },
     getStartTime() {
       if (this.startTime !== -1) {
         return this.startTime
       }
-      axios.get('/api/stat/start-time').then((res) => {
-        this.startTime = res.data.data.start_time
-      })
+      this.fetchStartTime().catch(() => {});
+      return this.startTime
     },
     async getPluginCollections(force = false, customSource = null) {
       // 获取插件市场数据
@@ -153,6 +176,15 @@ export const useCommonStore = defineStore({
                 "stars": pluginData?.stars ? pluginData.stars : 0,
                 "updated_at": pluginData?.updated_at ? pluginData.updated_at : "",
                 "display_name": pluginData?.display_name ? pluginData.display_name : "",
+                "astrbot_version": pluginData?.astrbot_version ? pluginData.astrbot_version : "",
+                "category": pluginData?.category ? pluginData.category : "",
+                "support_platforms": Array.isArray(pluginData?.support_platforms)
+                  ? pluginData.support_platforms
+                  : Array.isArray(pluginData?.support_platform)
+                    ? pluginData.support_platform
+                    : Array.isArray(pluginData?.platform)
+                      ? pluginData.platform
+                      : [],
               })
             }
           }

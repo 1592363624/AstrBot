@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import logging
 from asyncio import Queue
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from deprecated import deprecated
 
@@ -18,7 +20,6 @@ from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.persona_mgr import PersonaManager
 from astrbot.core.platform import Platform
 from astrbot.core.platform.astr_message_event import AstrMessageEvent, MessageSesion
-from astrbot.core.platform.manager import PlatformManager
 from astrbot.core.platform_message_history_mgr import PlatformMessageHistoryManager
 from astrbot.core.provider.entities import LLMResponse, ProviderRequest, ProviderType
 from astrbot.core.provider.func_tool_manager import FunctionTool, FunctionToolManager
@@ -34,6 +35,8 @@ from astrbot.core.star.filter.platform_adapter_type import (
     ADAPTER_NAME_2_TYPE,
     PlatformAdapterType,
 )
+from astrbot.core.subagent_orchestrator import SubAgentOrchestrator
+from astrbot.core.utils.astrbot_path import get_astrbot_system_tmp_path
 
 from ..exceptions import ProviderNotFoundError
 from .filter.command import CommandFilter
@@ -43,13 +46,20 @@ from .star_handler import EventType, StarHandlerMetadata, star_handlers_registry
 
 logger = logging.getLogger("astrbot")
 
+if TYPE_CHECKING:
+    from astrbot.core.cron.manager import CronJobManager
+
+
+class PlatformManagerProtocol(Protocol):
+    platform_insts: list[Platform]
+
 
 class Context:
     """暴露给插件的接口上下文。"""
 
     registered_web_apis: list = []
 
-    # back compatibility
+    # 向后兼容的变量
     _register_tasks: list[Awaitable] = []
     _star_manager = None
 
@@ -59,13 +69,15 @@ class Context:
         config: AstrBotConfig,
         db: BaseDatabase,
         provider_manager: ProviderManager,
-        platform_manager: PlatformManager,
+        platform_manager: PlatformManagerProtocol,
         conversation_manager: ConversationManager,
         message_history_manager: PlatformMessageHistoryManager,
         persona_manager: PersonaManager,
         astrbot_config_mgr: AstrBotConfigManager,
         knowledge_base_manager: KnowledgeBaseManager,
-    ):
+        cron_manager: CronJobManager,
+        subagent_orchestrator: SubAgentOrchestrator | None = None,
+    ) -> None:
         self._event_queue = event_queue
         """事件队列。消息平台通过事件队列传递消息事件。"""
         self._config = config
@@ -73,12 +85,22 @@ class Context:
         self._db = db
         """AstrBot 数据库"""
         self.provider_manager = provider_manager
+        """模型提供商管理器"""
         self.platform_manager = platform_manager
+        """平台适配器管理器"""
         self.conversation_manager = conversation_manager
+        """会话管理器"""
         self.message_history_manager = message_history_manager
+        """平台消息历史管理器"""
         self.persona_manager = persona_manager
+        """人格角色设定管理器"""
         self.astrbot_config_mgr = astrbot_config_mgr
+        """配置文件管理器(非webui)"""
         self.kb_manager = knowledge_base_manager
+        """知识库管理器"""
+        self.cron_manager = cron_manager
+        """Cron job manager, initialized by core lifecycle."""
+        self.subagent_orchestrator = subagent_orchestrator
 
     async def llm_generate(
         self,
@@ -86,6 +108,7 @@ class Context:
         chat_provider_id: str,
         prompt: str | None = None,
         image_urls: list[str] | None = None,
+        audio_urls: list[str] | None = None,
         tools: ToolSet | None = None,
         system_prompt: str | None = None,
         contexts: list[Message] | None = None,
@@ -99,6 +122,7 @@ class Context:
             chat_provider_id: The chat provider ID to use.
             prompt: The prompt to send to the LLM, if `contexts` and `prompt` are both provided, `prompt` will be appended as the last user message
             image_urls: List of image URLs to include in the prompt, if `contexts` and `prompt` are both provided, `image_urls` will be appended to the last user message
+            audio_urls: List of audio URLs or local paths to include in the prompt, if `contexts` and `prompt` are both provided, `audio_urls` will be appended to the last user message
             tools: ToolSet of tools available to the LLM
             system_prompt: System prompt to guide the LLM's behavior, if provided, it will always insert as the first system message in the context
             contexts: context messages for the LLM
@@ -114,6 +138,7 @@ class Context:
         llm_resp = await prov.text_chat(
             prompt=prompt,
             image_urls=image_urls,
+            audio_urls=audio_urls,
             func_tool=tools,
             contexts=contexts,
             system_prompt=system_prompt,
@@ -128,11 +153,12 @@ class Context:
         chat_provider_id: str,
         prompt: str | None = None,
         image_urls: list[str] | None = None,
+        audio_urls: list[str] | None = None,
         tools: ToolSet | None = None,
         system_prompt: str | None = None,
         contexts: list[Message] | None = None,
         max_steps: int = 30,
-        tool_call_timeout: int = 60,
+        tool_call_timeout: int = 120,
         **kwargs: Any,
     ) -> LLMResponse:
         """Run an agent loop that allows the LLM to call tools iteratively until a final answer is produced.
@@ -144,13 +170,17 @@ class Context:
             chat_provider_id: The chat provider ID to use.
             prompt: The prompt to send to the LLM, if `contexts` and `prompt` are both provided, `prompt` will be appended as the last user message
             image_urls: List of image URLs to include in the prompt, if `contexts` and `prompt` are both provided, `image_urls` will be appended to the last user message
+            audio_urls: List of audio URLs or local paths to include in the prompt, if `contexts` and `prompt` are both provided, `audio_urls` will be appended to the last user message
             tools: ToolSet of tools available to the LLM
             system_prompt: System prompt to guide the LLM's behavior, if provided, it will always insert as the first system message in the context
             contexts: context messages for the LLM
             max_steps: Maximum number of tool calls before stopping the loop
             **kwargs: Additional keyword arguments. The kwargs will not be passed to the LLM directly for now, but can include:
+                stream: bool - whether to stream the LLM response
                 agent_hooks: BaseAgentRunHooks[AstrAgentContext] - hooks to run during agent execution
                 agent_context: AstrAgentContext - context to use for the agent
+
+                other kwargs will be DIRECTLY passed to the runner.reset() method
 
         Returns:
             The final LLMResponse after tool calls are completed.
@@ -183,6 +213,7 @@ class Context:
         request = ProviderRequest(
             prompt=prompt,
             image_urls=image_urls or [],
+            audio_urls=audio_urls or [],
             func_tool=tools,
             contexts=context_,
             system_prompt=system_prompt or "",
@@ -194,6 +225,22 @@ class Context:
             )
         agent_runner = ToolLoopAgentRunner()
         tool_executor = FunctionToolExecutor()
+
+        streaming = kwargs.get("stream", False)
+
+        other_kwargs = {
+            k: v
+            for k, v in kwargs.items()
+            if k not in ["stream", "agent_hooks", "agent_context"]
+        }
+        if request.func_tool and request.func_tool.get_tool("astrbot_file_read_tool"):
+            other_kwargs.setdefault(
+                "tool_result_overflow_dir", get_astrbot_system_tmp_path()
+            )
+            other_kwargs.setdefault(
+                "read_tool", request.func_tool.get_tool("astrbot_file_read_tool")
+            )
+
         await agent_runner.reset(
             provider=prov,
             request=request,
@@ -203,7 +250,8 @@ class Context:
             ),
             tool_executor=tool_executor,
             agent_hooks=agent_hooks,
-            streaming=kwargs.get("stream", False),
+            streaming=streaming,
+            **other_kwargs,
         )
         async for _ in agent_runner.step_until_done(max_steps):
             pass
@@ -213,14 +261,16 @@ class Context:
         return llm_resp
 
     async def get_current_chat_provider_id(self, umo: str) -> str:
-        """Get the ID of the currently used chat provider.
+        """获取当前使用的聊天模型 Provider ID。
 
         Args:
-            umo(str): unified_message_origin value, if provided and user has enabled provider session isolation, the provider preferred by that session will be used.
+            umo: unified_message_origin。消息会话来源 ID。
+
+        Returns:
+            指定消息会话来源当前使用的聊天模型 Provider ID。
 
         Raises:
-            ProviderNotFoundError: If the specified chat provider is not found
-
+            ProviderNotFoundError: 未找到。
         """
         prov = self.get_using_provider(umo)
         if not prov:
@@ -242,20 +292,27 @@ class Context:
         return self.provider_manager.llm_tools
 
     def activate_llm_tool(self, name: str) -> bool:
-        """激活一个已经注册的函数调用工具。注册的工具默认是激活状态。
+        """激活一个已经注册的函数调用工具。
+
+        Args:
+            name: 工具名称。
 
         Returns:
-            如果没找到，会返回 False
+            如果成功激活返回 True，如果没找到工具返回 False。
 
+        Note:
+            注册的工具默认是激活状态。
         """
         return self.provider_manager.llm_tools.activate_llm_tool(name, star_map)
 
     def deactivate_llm_tool(self, name: str) -> bool:
         """停用一个已经注册的函数调用工具。
 
-        Returns:
-            如果没找到，会返回 False
+        Args:
+            name: 工具名称。
 
+        Returns:
+            如果成功停用返回 True，如果没找到工具返回 False。
         """
         return self.provider_manager.llm_tools.deactivate_llm_tool(name)
 
@@ -265,7 +322,17 @@ class Context:
     ) -> (
         Provider | TTSProvider | STTProvider | EmbeddingProvider | RerankProvider | None
     ):
-        """通过 ID 获取对应的 LLM Provider。"""
+        """通过 ID 获取对应的 LLM Provider。
+
+        Args:
+            provider_id: 提供者 ID。
+
+        Returns:
+            提供者实例，如果未找到则返回 None。
+
+        Note:
+            如果提供者 ID 存在但未找到提供者，会记录警告日志。
+        """
         prov = self.provider_manager.inst_map.get(provider_id)
         if provider_id and not prov:
             logger.warning(
@@ -289,27 +356,42 @@ class Context:
         """获取所有用于 Embedding 任务的 Provider。"""
         return self.provider_manager.embedding_provider_insts
 
-    def get_using_provider(self, umo: str | None = None) -> Provider:
-        """获取当前使用的用于文本生成任务的 LLM Provider(Chat_Completion 类型)。通过 /provider 指令切换。
+    def get_using_provider(self, umo: str | None = None) -> Provider | None:
+        """获取当前使用的用于文本生成任务的 LLM Provider(Chat_Completion 类型)。
 
         Args:
-            umo(str): unified_message_origin 值，如果传入并且用户启用了提供商会话隔离，则使用该会话偏好的提供商。
+            umo: unified_message_origin 值，如果传入并且用户启用了提供商会话隔离，
+                 则使用该会话偏好的对话模型（提供商）。
 
+        Returns:
+            当前使用的对话模型（提供商），如果未设置则返回 None。
+
+        Raises:
+            ValueError: 该会话来源配置的的对话模型（提供商）的类型不正确。
         """
         prov = self.provider_manager.get_using_provider(
             provider_type=ProviderType.CHAT_COMPLETION,
             umo=umo,
         )
+        if prov is None:
+            return None
         if not isinstance(prov, Provider):
-            raise ValueError("返回的 Provider 不是 Provider 类型")
+            raise ValueError(
+                f"该会话来源的对话模型（提供商）的类型不正确: {type(prov)}"
+            )
         return prov
 
     def get_using_tts_provider(self, umo: str | None = None) -> TTSProvider | None:
         """获取当前使用的用于 TTS 任务的 Provider。
 
         Args:
-            umo(str): unified_message_origin 值，如果传入，则使用该会话偏好的提供商。
+            umo: unified_message_origin 值，如果传入，则使用该会话偏好的提供商。
 
+        Returns:
+            当前使用的 TTS 提供者，如果未设置则返回 None。
+
+        Raises:
+            ValueError: 返回的提供者不是 TTSProvider 类型。
         """
         prov = self.provider_manager.get_using_provider(
             provider_type=ProviderType.TEXT_TO_SPEECH,
@@ -323,8 +405,13 @@ class Context:
         """获取当前使用的用于 STT 任务的 Provider。
 
         Args:
-            umo(str): unified_message_origin 值，如果传入，则使用该会话偏好的提供商。
+            umo: unified_message_origin 值，如果传入，则使用该会话偏好的提供商。
 
+        Returns:
+            当前使用的 STT 提供者，如果未设置则返回 None。
+
+        Raises:
+            ValueError: 返回的提供者不是 STTProvider 类型。
         """
         prov = self.provider_manager.get_using_provider(
             provider_type=ProviderType.SPEECH_TO_TEXT,
@@ -335,9 +422,19 @@ class Context:
         return prov
 
     def get_config(self, umo: str | None = None) -> AstrBotConfig:
-        """获取 AstrBot 的配置。"""
+        """获取 AstrBot 的配置。
+
+        Args:
+            umo: unified_message_origin 值，用于获取特定会话的配置。
+
+        Returns:
+            AstrBot 配置对象。
+
+        Note:
+            如果不提供 umo 参数，将返回默认配置。
+        """
         if not umo:
-            # using default config
+            # 使用默认配置
             return self._config
         return self.astrbot_config_mgr.get_conf(umo)
 
@@ -348,14 +445,19 @@ class Context:
     ) -> bool:
         """根据 session(unified_msg_origin) 主动发送消息。
 
-        @param session: 消息会话。通过 event.session 或者 event.unified_msg_origin 获取。
-        @param message_chain: 消息链。
+        Args:
+            session: 消息会话。通过 event.session 或者 event.unified_msg_origin 获取。
+            message_chain: 消息链。
 
-        @return: 是否找到匹配的平台。
+        Returns:
+            是否找到匹配的平台。
 
-        当 session 为字符串时，会尝试解析为 MessageSesion 对象，如果解析失败，会抛出 ValueError 异常。
+        Raises:
+            ValueError: session 字符串不合法时抛出。
 
-        NOTE: qq_official(QQ 官方 API 平台) 不支持此方法
+        Note:
+            当 session 为字符串时，会尝试解析为 MessageSession 对象。(类名为MessageSesion是因为历史遗留拼写错误)
+            qq_official(QQ 官方 API 平台) 不支持此方法。
         """
         if isinstance(session, str):
             try:
@@ -367,21 +469,32 @@ class Context:
             if platform.meta().id == session.platform_name:
                 await platform.send_by_session(session, message_chain)
                 return True
+        logger.warning(
+            f"cannot find platform for session {str(session)}, message not sent"
+        )
         return False
 
     def add_llm_tools(self, *tools: FunctionTool) -> None:
-        """添加 LLM 工具。"""
+        """添加 LLM 工具。
+
+        Args:
+            *tools: 要添加的函数工具对象。
+
+        Note:
+            如果工具已存在，会替换已存在的工具。
+        """
         tool_name = {tool.name for tool in self.provider_manager.llm_tools.func_list}
         module_path = ""
         for tool in tools:
             if not module_path:
                 _parts = []
                 module_part = tool.__module__.split(".")
-                flags = ["packages", "plugins"]
+                flags = ["builtin_stars", "plugins"]
                 for i, part in enumerate(module_part):
                     _parts.append(part)
                     if part in flags and i + 1 < len(module_part):
                         _parts.append(module_part[i + 1])
+                        _parts.append("main")
                         break
                 tool.handler_module_path = ".".join(_parts)
                 module_path = tool.handler_module_path
@@ -402,7 +515,18 @@ class Context:
         view_handler: Awaitable,
         methods: list,
         desc: str,
-    ):
+    ) -> None:
+        """注册 Web API。
+
+        Args:
+            route: API 路由路径。
+            view_handler: 异步视图处理函数。
+            methods: HTTP 方法列表。
+            desc: API 描述。
+
+        Note:
+            如果相同路由和方法已注册，会替换现有的 API。
+        """
         for idx, api in enumerate(self.registered_web_apis):
             if api[0] == route and methods == api[2]:
                 self.registered_web_apis[idx] = (route, view_handler, methods, desc)
@@ -421,7 +545,14 @@ class Context:
     def get_platform(self, platform_type: PlatformAdapterType | str) -> Platform | None:
         """获取指定类型的平台适配器。
 
-        该方法已经过时，请使用 get_platform_inst 方法。(>= AstrBot v4.0.0)
+        Args:
+            platform_type: 平台类型或平台名称。
+
+        Returns:
+            平台适配器实例，如果未找到则返回 None。
+
+        Note:
+            该方法已经过时，请使用 get_platform_inst 方法。(>= AstrBot v4.0.0)
         """
         for platform in self.platform_manager.platform_insts:
             name = platform.meta().name
@@ -438,22 +569,32 @@ class Context:
         """获取指定 ID 的平台适配器实例。
 
         Args:
-            platform_id (str): 平台适配器的唯一标识符。你可以通过 event.get_platform_id() 获取。
+            platform_id: 平台适配器的唯一标识符。
 
         Returns:
-            Platform: 平台适配器实例，如果未找到则返回 None。
+            平台适配器实例，如果未找到则返回 None。
 
+        Note:
+            可以通过 event.get_platform_id() 获取平台 ID。
         """
         for platform in self.platform_manager.platform_insts:
             if platform.meta().id == platform_id:
                 return platform
 
     def get_db(self) -> BaseDatabase:
-        """获取 AstrBot 数据库。"""
+        """获取 AstrBot 数据库。
+
+        Returns:
+            数据库实例。
+        """
         return self._db
 
-    def register_provider(self, provider: Provider):
-        """注册一个 LLM Provider(Chat_Completion 类型)。"""
+    def register_provider(self, provider: Provider) -> None:
+        """注册一个 LLM Provider(Chat_Completion 类型)。
+
+        Args:
+            provider: 提供者实例。
+        """
         self.provider_manager.provider_insts.append(provider)
 
     def register_llm_tool(
@@ -465,12 +606,16 @@ class Context:
     ) -> None:
         """[DEPRECATED]为函数调用（function-calling / tools-use）添加工具。
 
-        @param name: 函数名
-        @param func_args: 函数参数列表，格式为 [{"type": "string", "name": "arg_name", "description": "arg_description"}, ...]
-        @param desc: 函数描述
-        @param func_obj: 异步处理函数。
+        Args:
+            name: 函数名。
+            func_args: 函数参数列表，格式为
+                [{"type": "string", "name": "arg_name", "description": "arg_description"}, ...]。
+            desc: 函数描述。
+            func_obj: 异步处理函数。
 
-        异步处理函数会接收到额外的的关键词参数：event: AstrMessageEvent, context: Context。
+        Note:
+            异步处理函数会接收到额外的关键词参数：event: AstrMessageEvent, context: Context。
+            该方法已弃用，请使用新的注册方式。
         """
         md = StarHandlerMetadata(
             event_type=EventType.OnLLMRequestEvent,
@@ -485,7 +630,15 @@ class Context:
         self.provider_manager.llm_tools.add_func(name, func_args, desc, func_obj)
 
     def unregister_llm_tool(self, name: str) -> None:
-        """[DEPRECATED]删除一个函数调用工具。如果再要启用，需要重新注册。"""
+        """[DEPRECATED]删除一个函数调用工具。
+
+        Args:
+            name: 工具名称。
+
+        Note:
+            如果再要启用，需要重新注册。
+            该方法已弃用。
+        """
         self.provider_manager.llm_tools.remove_func(name)
 
     def register_commands(
@@ -497,17 +650,20 @@ class Context:
         awaitable: Callable[..., Awaitable[Any]],
         use_regex=False,
         ignore_prefix=False,
-    ):
-        """注册一个命令。
+    ) -> None:
+        """[DEPRECATED]注册一个命令。
 
-        [Deprecated] 推荐使用装饰器注册指令。该方法将在未来的版本中被移除。
+        Args:
+            star_name: 插件（Star）名称。
+            command_name: 命令名称。
+            desc: 命令描述。
+            priority: 优先级。1-10。
+            awaitable: 异步处理函数。
+            use_regex: 是否使用正则表达式匹配命令。
+            ignore_prefix: 是否忽略命令前缀。
 
-        @param star_name: 插件（Star）名称。
-        @param command_name: 命令名称。
-        @param desc: 命令描述。
-        @param priority: 优先级。1-10。
-        @param awaitable: 异步处理函数。
-
+        Note:
+            推荐使用装饰器注册指令。该方法将在未来的版本中被移除。
         """
         md = StarHandlerMetadata(
             event_type=EventType.AdapterMessageEvent,
@@ -526,6 +682,14 @@ class Context:
             )
         star_handlers_registry.append(md)
 
-    def register_task(self, task: Awaitable, desc: str):
-        """[DEPRECATED]注册一个异步任务。"""
+    def register_task(self, task: Awaitable, desc: str) -> None:
+        """[DEPRECATED]注册一个异步任务。
+
+        Args:
+            task: 异步任务。
+            desc: 任务描述。
+
+        Note:
+            该方法已弃用。
+        """
         self._register_tasks.append(task)

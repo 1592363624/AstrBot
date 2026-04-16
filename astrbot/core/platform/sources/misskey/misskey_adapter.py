@@ -21,7 +21,7 @@ try:
 except Exception:
     magic = None
 
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
 from .misskey_event import MisskeyPlatformEvent
 from .misskey_utils import (
@@ -91,11 +91,9 @@ class MisskeyPlatformAdapter(Platform):
         except Exception:
             self.max_download_bytes = None
 
-        self.unique_session = platform_settings["unique_session"]
-
         self.api: MisskeyAPI | None = None
         self._running = False
-        self.client_self_id = ""
+        self.bot_self_id = ""
         self._bot_username = ""
         self._user_cache = {}
 
@@ -123,7 +121,7 @@ class MisskeyPlatformAdapter(Platform):
             support_streaming_message=False,
         )
 
-    async def run(self):
+    async def run(self) -> None:
         if not self.instance_url or not self.access_token:
             logger.error("[Misskey] 配置不完整，无法启动")
             return
@@ -140,10 +138,10 @@ class MisskeyPlatformAdapter(Platform):
 
         try:
             user_info = await self.api.get_current_user()
-            self.client_self_id = str(user_info.get("id", ""))
+            self.bot_self_id = str(user_info.get("id", ""))
             self._bot_username = user_info.get("username", "")
             logger.info(
-                f"[Misskey] 已连接用户: {self._bot_username} (ID: {self.client_self_id})",
+                f"[Misskey] 已连接用户: {self._bot_username} (ID: {self.bot_self_id})",
             )
         except Exception as e:
             logger.error(f"[Misskey] 获取用户信息失败: {e}")
@@ -152,7 +150,7 @@ class MisskeyPlatformAdapter(Platform):
 
         await self._start_websocket_connection()
 
-    def _register_event_handlers(self, streaming):
+    def _register_event_handlers(self, streaming) -> None:
         """注册事件处理器"""
         streaming.add_message_handler("notification", self._handle_notification)
         streaming.add_message_handler("main:notification", self._handle_notification)
@@ -196,7 +194,7 @@ class MisskeyPlatformAdapter(Platform):
         message: AstrBotMessage,
         poll: dict[str, Any],
         message_parts: list[str],
-    ):
+    ) -> None:
         """处理投票数据，将其添加到消息中"""
         try:
             if not isinstance(message.raw_message, dict):
@@ -235,7 +233,7 @@ class MisskeyPlatformAdapter(Platform):
 
         return fields
 
-    async def _start_websocket_connection(self):
+    async def _start_websocket_connection(self) -> None:
         backoff_delay = 1.0
         max_backoff = 300.0
         backoff_multiplier = 1.5
@@ -283,7 +281,7 @@ class MisskeyPlatformAdapter(Platform):
                 await asyncio.sleep(sleep_time)
                 backoff_delay = min(backoff_delay * backoff_multiplier, max_backoff)
 
-    async def _handle_notification(self, data: dict[str, Any]):
+    async def _handle_notification(self, data: dict[str, Any]) -> None:
         try:
             notification_type = data.get("type")
             logger.debug(
@@ -307,16 +305,16 @@ class MisskeyPlatformAdapter(Platform):
         except Exception as e:
             logger.error(f"[Misskey] 处理通知失败: {e}")
 
-    async def _handle_chat_message(self, data: dict[str, Any]):
+    async def _handle_chat_message(self, data: dict[str, Any]) -> None:
         try:
             sender_id = str(
                 data.get("fromUserId", "") or data.get("fromUser", {}).get("id", ""),
             )
             room_id = data.get("toRoomId")
             logger.debug(
-                f"[Misskey] 收到聊天事件: sender_id={sender_id}, room_id={room_id}, is_self={sender_id == self.client_self_id}",
+                f"[Misskey] 收到聊天事件: sender_id={sender_id}, room_id={room_id}, is_self={sender_id == self.bot_self_id}",
             )
-            if sender_id == self.client_self_id:
+            if sender_id == self.bot_self_id:
                 return
 
             if room_id:
@@ -342,7 +340,7 @@ class MisskeyPlatformAdapter(Platform):
         except Exception as e:
             logger.error(f"[Misskey] 处理聊天消息失败: {e}")
 
-    async def _debug_handler(self, data: dict[str, Any]):
+    async def _debug_handler(self, data: dict[str, Any]) -> None:
         event_type = data.get("type", "unknown")
         logger.debug(
             f"[Misskey] 收到未处理事件: type={event_type}, channel={data.get('channel', 'unknown')}",
@@ -356,13 +354,13 @@ class MisskeyPlatformAdapter(Platform):
         mentions = note.get("mentions", [])
         if self._bot_username and f"@{self._bot_username}" in text:
             return True
-        if self.client_self_id in [str(uid) for uid in mentions]:
+        if self.bot_self_id in [str(uid) for uid in mentions]:
             return True
 
         reply = note.get("reply")
         if reply and isinstance(reply, dict):
             reply_user_id = str(reply.get("user", {}).get("id", ""))
-            if reply_user_id == self.client_self_id:
+            if reply_user_id == self.bot_self_id:
                 return bool(self._bot_username and f"@{self._bot_username}" in text)
 
         return False
@@ -500,7 +498,7 @@ class MisskeyPlatformAdapter(Platform):
                 finally:
                     # 清理临时文件
                     if local_path and isinstance(local_path, str):
-                        data_temp = os.path.join(get_astrbot_data_path(), "temp")
+                        data_temp = get_astrbot_temp_path()
                         if local_path.startswith(data_temp) and os.path.exists(
                             local_path,
                         ):
@@ -600,7 +598,7 @@ class MisskeyPlatformAdapter(Platform):
                     visibility, visible_user_ids = resolve_message_visibility(
                         user_id=user_id_for_cache,
                         user_cache=self._user_cache,
-                        self_id=self.client_self_id,
+                        self_id=self.bot_self_id,
                         default_visibility=self.default_visibility,
                     )
                     logger.debug(
@@ -639,15 +637,14 @@ class MisskeyPlatformAdapter(Platform):
         message = create_base_message(
             raw_data,
             sender_info,
-            self.client_self_id,
+            self.bot_self_id,
             is_chat=False,
-            unique_session=self.unique_session,
         )
         cache_user_info(
             self._user_cache,
             sender_info,
             raw_data,
-            self.client_self_id,
+            self.bot_self_id,
             is_chat=False,
         )
 
@@ -659,7 +656,7 @@ class MisskeyPlatformAdapter(Platform):
                 message,
                 raw_text,
                 self._bot_username,
-                self.client_self_id,
+                self.bot_self_id,
             )
             message_parts.extend(text_parts)
 
@@ -688,15 +685,14 @@ class MisskeyPlatformAdapter(Platform):
         message = create_base_message(
             raw_data,
             sender_info,
-            self.client_self_id,
+            self.bot_self_id,
             is_chat=True,
-            unique_session=self.unique_session,
         )
         cache_user_info(
             self._user_cache,
             sender_info,
             raw_data,
-            self.client_self_id,
+            self.bot_self_id,
             is_chat=True,
         )
 
@@ -717,20 +713,19 @@ class MisskeyPlatformAdapter(Platform):
         message = create_base_message(
             raw_data,
             sender_info,
-            self.client_self_id,
+            self.bot_self_id,
             is_chat=False,
             room_id=room_id,
-            unique_session=self.unique_session,
         )
 
         cache_user_info(
             self._user_cache,
             sender_info,
             raw_data,
-            self.client_self_id,
+            self.bot_self_id,
             is_chat=False,
         )
-        cache_room_info(self._user_cache, raw_data, self.client_self_id)
+        cache_room_info(self._user_cache, raw_data, self.bot_self_id)
 
         raw_text = raw_data.get("text", "")
         message_parts = []
@@ -741,7 +736,7 @@ class MisskeyPlatformAdapter(Platform):
                     message,
                     raw_text,
                     self._bot_username,
-                    self.client_self_id,
+                    self.bot_self_id,
                 )
                 message_parts.extend(text_parts)
             else:
@@ -759,7 +754,7 @@ class MisskeyPlatformAdapter(Platform):
         )
         return message
 
-    async def terminate(self):
+    async def terminate(self) -> None:
         self._running = False
         if self.api:
             await self.api.close()

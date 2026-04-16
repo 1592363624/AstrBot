@@ -81,10 +81,10 @@
     </v-container>
 
     <!-- 添加/编辑 MCP 服务器对话框 -->
-    <v-dialog v-model="showMcpServerDialog" max-width="750px" persistent>
+    <v-dialog v-model="showMcpServerDialog" max-width="750px">
       <v-card>
-        <v-card-title class="bg-primary text-white py-3">
-          <v-icon color="white" class="me-2">{{ isEditMode ? 'mdi-pencil' : 'mdi-plus' }}</v-icon>
+        <v-card-title class="pa-4 pl-6">
+          <v-icon class="me-2">{{ isEditMode ? 'mdi-pencil' : 'mdi-plus' }}</v-icon>
           <span>{{ isEditMode ? tm('dialogs.addServer.editTitle') : tm('dialogs.addServer.title') }}</span>
         </v-card-title>
 
@@ -109,6 +109,10 @@
             </div>
 
             <small style="color: grey">*{{ tm('dialogs.addServer.tips.timeoutConfig') }}</small>
+
+            <v-alert type="info" variant="tonal" density="compact" class="mt-3">
+              {{ tm('dialogs.addServer.tips.transportRecommendation') }}
+            </v-alert>
 
             <div class="monaco-container" style="margin-top: 16px;">
               <VueMonacoEditor v-model:value="serverConfigJson" theme="vs-dark" language="json" :options="{
@@ -218,6 +222,10 @@ import axios from 'axios';
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor';
 import ItemCard from '@/components/shared/ItemCard.vue';
 import { useI18n, useModuleI18n } from '@/i18n/composables';
+import {
+  askForConfirmation as askForConfirmationDialog,
+  useConfirmDialog
+} from '@/utils/confirmDialog';
 
 export default {
   name: 'McpServersSection',
@@ -228,7 +236,8 @@ export default {
   setup() {
     const { t } = useI18n();
     const { tm } = useModuleI18n('features/tooluse');
-    return { t, tm };
+    const confirmDialog = useConfirmDialog();
+    return { t, tm, confirmDialog };
   },
   data() {
     return {
@@ -251,6 +260,7 @@ export default {
         active: true,
         tools: []
       },
+      originalServerName: '',
       save_message_snack: false,
       save_message: '',
       save_message_success: 'success'
@@ -278,8 +288,9 @@ export default {
   mounted() {
     this.getServers();
     this.refreshInterval = setInterval(() => {
+      // 轮询时间延长到30秒，减少服务器压力，同时保持数据相对新鲜
       this.getServers();
-    }, 5000);
+    }, 30000);
   },
   unmounted() {
     if (this.refreshInterval) {
@@ -294,6 +305,10 @@ export default {
       this.loadingGettingServers = true;
       axios.get('/api/tools/mcp/servers')
         .then(response => {
+          if (response.data.status === 'error') {
+            this.showError(response.data.message || this.tm('messages.getServersError', { error: 'Unknown error' }));
+            return;
+          }
           this.mcpServers = response.data.data || [];
           this.mcpServers.forEach(server => {
             if (!this.mcpServerUpdateLoaders[server.name]) {
@@ -359,10 +374,17 @@ export default {
           active: this.currentServer.active,
           ...configObj
         };
+        if (this.isEditMode && this.originalServerName) {
+          serverData.oldName = this.originalServerName;
+        }
         const endpoint = this.isEditMode ? '/api/tools/mcp/update' : '/api/tools/mcp/add';
         axios.post(endpoint, serverData)
           .then(response => {
             this.loading = false;
+            if (response.data.status === 'error') {
+              this.showError(response.data.message || this.tm('messages.saveError', { error: 'Unknown error' }));
+              return;
+            }
             this.showMcpServerDialog = false;
             this.addServerDialogMessage = '';
             this.getServers();
@@ -378,18 +400,21 @@ export default {
         this.showError(this.tm('dialogs.addServer.errors.jsonParse', { error: e.message }));
       }
     },
-    deleteServer(server) {
+    async deleteServer(server) {
       const serverName = server.name || server;
-      if (confirm(this.tm('dialogs.confirmDelete', { name: serverName }))) {
-        axios.post('/api/tools/mcp/delete', { name: serverName })
-          .then(response => {
-            this.getServers();
-            this.showSuccess(response.data.message || this.tm('messages.deleteSuccess'));
-          })
-          .catch(error => {
-            this.showError(this.tm('messages.deleteError', { error: error.response?.data?.message || error.message }));
-          });
+      const message = this.tm('dialogs.confirmDelete', { name: serverName });
+      if (!(await askForConfirmationDialog(message, this.confirmDialog))) {
+        return;
       }
+
+      axios.post('/api/tools/mcp/delete', { name: serverName })
+        .then(response => {
+          this.getServers();
+          this.showSuccess(response.data.message || this.tm('messages.deleteSuccess'));
+        })
+        .catch(error => {
+          this.showError(this.tm('messages.deleteError', { error: error.response?.data?.message || error.message }));
+        });
     },
     editServer(server) {
       const configCopy = { ...server };
@@ -402,6 +427,7 @@ export default {
         active: server.active,
         tools: server.tools || []
       };
+      this.originalServerName = server.name;
       this.serverConfigJson = JSON.stringify(configCopy, null, 2);
       this.isEditMode = true;
       this.showMcpServerDialog = true;
@@ -461,6 +487,7 @@ export default {
       this.serverConfigJson = '';
       this.jsonError = null;
       this.isEditMode = false;
+      this.originalServerName = '';
     },
     showSuccess(message) {
       this.save_message = message;

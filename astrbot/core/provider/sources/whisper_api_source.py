@@ -4,8 +4,9 @@ import uuid
 from openai import NOT_GIVEN, AsyncOpenAI
 
 from astrbot.core import logger
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 from astrbot.core.utils.io import download_file
+from astrbot.core.utils.media_utils import convert_audio_to_wav
 from astrbot.core.utils.tencent_record_helper import (
     convert_to_pcm_wav,
     tencent_silk_to_wav,
@@ -38,7 +39,7 @@ class ProviderOpenAIWhisperAPI(STTProvider):
 
         self.set_model(provider_config["model"])
 
-    async def _get_audio_format(self, file_path):
+    async def _get_audio_format(self, file_path) -> str | None:
         # 定义要检测的头部字节
         silk_header = b"SILK"
         amr_header = b"#!AMR"
@@ -65,22 +66,42 @@ class ProviderOpenAIWhisperAPI(STTProvider):
             if "multimedia.nt.qq.com.cn" in audio_url:
                 is_tencent = True
 
-            name = str(uuid.uuid4())
-            temp_dir = os.path.join(get_astrbot_data_path(), "temp")
-            path = os.path.join(temp_dir, name)
+            temp_dir = get_astrbot_temp_path()
+            path = os.path.join(
+                temp_dir,
+                f"whisper_api_{uuid.uuid4().hex[:8]}.input",
+            )
             await download_file(audio_url, path)
             audio_url = path
 
         if not os.path.exists(audio_url):
             raise FileNotFoundError(f"文件不存在: {audio_url}")
 
-        if audio_url.endswith(".amr") or audio_url.endswith(".silk") or is_tencent:
+        lower_audio_url = audio_url.lower()
+
+        if lower_audio_url.endswith(".opus"):
+            temp_dir = get_astrbot_temp_path()
+            output_path = os.path.join(
+                temp_dir,
+                f"whisper_api_{uuid.uuid4().hex[:8]}.wav",
+            )
+            logger.info("Converting opus file to wav using convert_audio_to_wav...")
+            await convert_audio_to_wav(audio_url, output_path)
+            audio_url = output_path
+        elif (
+            lower_audio_url.endswith(".amr")
+            or lower_audio_url.endswith(".silk")
+            or is_tencent
+        ):
             file_format = await self._get_audio_format(audio_url)
 
             # 判断是否需要转换
             if file_format in ["silk", "amr"]:
-                temp_dir = os.path.join(get_astrbot_data_path(), "temp")
-                output_path = os.path.join(temp_dir, str(uuid.uuid4()) + ".wav")
+                temp_dir = get_astrbot_temp_path()
+                output_path = os.path.join(
+                    temp_dir,
+                    f"whisper_api_{uuid.uuid4().hex[:8]}.wav",
+                )
 
                 if file_format == "silk":
                     logger.info(
@@ -107,3 +128,7 @@ class ProviderOpenAIWhisperAPI(STTProvider):
             except Exception as e:
                 logger.error(f"Failed to remove temp file {audio_url}: {e}")
         return result.text
+
+    async def terminate(self):
+        if self.client:
+            await self.client.close()

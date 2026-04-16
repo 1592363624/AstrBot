@@ -1,4 +1,4 @@
-{
+﻿{
   "title": "自定义规则",
   "subtitle": "为特定会话设置自定义规则，优先级高于全局配置",
   "buttons": {
@@ -94,6 +94,43 @@
     "title": "确认批量删除",
     "message": "确定要删除选中的 {count} 条规则吗？删除后将恢复使用全局配置。"
   },
+  "batchOperations": {
+    "title": "批量操作",
+    "hint": "快速批量修改会话配置",
+    "scope": "应用范围",
+    "scopeSelected": "选中的会话",
+    "scopeAll": "所有会话",
+    "scopeGroup": "所有群聊",
+    "scopePrivate": "所有私聊",
+    "llmStatus": "LLM 状态",
+    "ttsStatus": "TTS 状态",
+    "chatProvider": "聊天模型",
+    "ttsProvider": "TTS 模型",
+    "apply": "应用更改"
+  },
+  "groups": {
+    "title": "分组管理",
+    "count": "{count} 个分组",
+    "addToGroup": "添加到分组",
+    "create": "新建分组",
+    "edit": "编辑分组",
+    "name": "分组名称",
+    "sessionsCount": "{count} 个会话",
+    "empty": "暂无分组，点击「新建分组」创建",
+    "availableSessions": "可选会话 ({count})",
+    "selectedSessions": "已选会话 ({count})",
+    "searchPlaceholder": "搜索...",
+    "noMatch": "无匹配项",
+    "noMembers": "暂无成员",
+    "customGroupDivider": "── 自定义分组 ──",
+    "customGroupOption": "📁 {name} ({count})",
+    "groupOption": "{name} ({count} 个会话)",
+    "deleteConfirm": "确定要删除分组 \"{name}\" 吗？"
+  },
+  "status": {
+    "enabled": "启用",
+    "disabled": "禁用"
+  },
   "messages": {
     "refreshSuccess": "数据已刷新",
     "loadError": "加载数据失败",
@@ -105,6 +142,17 @@
     "deleteError": "删除失败",
     "noChanges": "没有需要保存的更改",
     "batchDeleteSuccess": "批量删除成功",
-    "batchDeleteError": "批量删除失败"
+    "batchDeleteError": "批量删除失败",
+    "selectSessionsFirst": "请先选择要操作的会话",
+    "selectAtLeastOneConfig": "请至少选择一项要修改的配置",
+    "batchUpdateSuccess": "批量更新成功",
+    "partialUpdateFailed": "部分更新失败",
+    "batchUpdateError": "批量更新失败",
+    "groupNameRequired": "分组名称不能为空",
+    "saveGroupError": "保存分组失败",
+    "deleteGroupError": "删除分组失败",
+    "selectSessionsToAddFirst": "请先选择要添加的会话",
+    "addToGroupSuccess": "已添加 {count} 个会话到分组",
+    "addToGroupError": "添加失败"
   }
 }

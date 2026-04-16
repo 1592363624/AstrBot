@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import itertools
 import logging
 import time
@@ -41,7 +42,6 @@ class AiocqhttpAdapter(Platform):
         super().__init__(platform_config, event_queue)
 
         self.settings = platform_settings
-        self.unique_session = platform_settings["unique_session"]
         self.host = platform_config["ws_reverse_host"]
         self.port = platform_config["ws_reverse_port"]
 
@@ -62,38 +62,55 @@ class AiocqhttpAdapter(Platform):
         )
 
         @self.bot.on_request()
-        async def request(event: Event):
-            abm = await self.convert_message(event)
-            if abm:
+        async def request(event: Event) -> None:
+            try:
+                abm = await self.convert_message(event)
+                if not abm:
+                    return
                 await self.handle_msg(abm)
+            except Exception as e:
+                logger.exception(f"Handle request message failed: {e}")
+                return
 
         @self.bot.on_notice()
-        async def notice(event: Event):
-            abm = await self.convert_message(event)
-            if abm:
-                await self.handle_msg(abm)
+        async def notice(event: Event) -> None:
+            try:
+                abm = await self.convert_message(event)
+                if abm:
+                    await self.handle_msg(abm)
+            except Exception as e:
+                logger.exception(f"Handle notice message failed: {e}")
+                return
 
         @self.bot.on_message("group")
-        async def group(event: Event):
-            abm = await self.convert_message(event)
-            if abm:
-                await self.handle_msg(abm)
+        async def group(event: Event) -> None:
+            try:
+                abm = await self.convert_message(event)
+                if abm:
+                    await self.handle_msg(abm)
+            except Exception as e:
+                logger.exception(f"Handle group message failed: {e}")
+                return
 
         @self.bot.on_message("private")
-        async def private(event: Event):
-            abm = await self.convert_message(event)
-            if abm:
-                await self.handle_msg(abm)
+        async def private(event: Event) -> None:
+            try:
+                abm = await self.convert_message(event)
+                if abm:
+                    await self.handle_msg(abm)
+            except Exception as e:
+                logger.exception(f"Handle private message failed: {e}")
+                return
 
         @self.bot.on_websocket_connection
-        def on_websocket_connection(_):
+        def on_websocket_connection(_) -> None:
             logger.info("aiocqhttp(OneBot v11) 适配器已连接。")
 
     async def send_by_session(
         self,
         session: MessageSesion,
         message_chain: MessageChain,
-    ):
+    ) -> None:
         is_group = session.message_type == MessageType.GROUP_MESSAGE
         if is_group:
             session_id = session.session_id.split("_")[-1]
@@ -136,14 +153,11 @@ class AiocqhttpAdapter(Platform):
             abm.group_id = str(event.group_id)
         else:
             abm.type = MessageType.FRIEND_MESSAGE
-        if self.unique_session and abm.type == MessageType.GROUP_MESSAGE:
-            abm.session_id = str(abm.sender.user_id) + "_" + str(event.group_id)
-        else:
-            abm.session_id = (
-                str(event.group_id)
-                if abm.type == MessageType.GROUP_MESSAGE
-                else abm.sender.user_id
-            )
+        abm.session_id = (
+            str(event.group_id)
+            if abm.type == MessageType.GROUP_MESSAGE
+            else abm.sender.user_id
+        )
         abm.message_str = ""
         abm.message = []
         abm.timestamp = int(time.time())
@@ -164,16 +178,11 @@ class AiocqhttpAdapter(Platform):
             abm.type = MessageType.GROUP_MESSAGE
         else:
             abm.type = MessageType.FRIEND_MESSAGE
-        if self.unique_session and abm.type == MessageType.GROUP_MESSAGE:
-            abm.session_id = (
-                str(abm.sender.user_id) + "_" + str(event.group_id)
-            )  # 也保留群组 id
-        else:
-            abm.session_id = (
-                str(event.group_id)
-                if abm.type == MessageType.GROUP_MESSAGE
-                else abm.sender.user_id
-            )
+        abm.session_id = (
+            str(event.group_id)
+            if abm.type == MessageType.GROUP_MESSAGE
+            else abm.sender.user_id
+        )
         abm.message_str = ""
         abm.message = []
         abm.raw_message = event
@@ -182,7 +191,7 @@ class AiocqhttpAdapter(Platform):
 
         if "sub_type" in event:
             if event["sub_type"] == "poke" and "target_id" in event:
-                abm.message.append(Poke(qq=str(event["target_id"]), type="poke"))
+                abm.message.append(Poke(id=str(event["target_id"])))
 
         return abm
 
@@ -210,16 +219,11 @@ class AiocqhttpAdapter(Platform):
             abm.group.group_name = event.get("group_name", "N/A")
         elif event["message_type"] == "private":
             abm.type = MessageType.FRIEND_MESSAGE
-        if self.unique_session and abm.type == MessageType.GROUP_MESSAGE:
-            abm.session_id = (
-                abm.sender.user_id + "_" + str(event.group_id)
-            )  # 也保留群组 id
-        else:
-            abm.session_id = (
-                str(event.group_id)
-                if abm.type == MessageType.GROUP_MESSAGE
-                else abm.sender.user_id
-            )
+        abm.session_id = (
+            str(event.group_id)
+            if abm.type == MessageType.GROUP_MESSAGE
+            else abm.sender.user_id
+        )
 
         abm.message_id = str(event.message_id)
         abm.message = []
@@ -386,9 +390,10 @@ class AiocqhttpAdapter(Platform):
 
                 message_str += "".join(at_parts)
             elif t == "markdown":
-                text = m["data"].get("markdown") or m["data"].get("content", "")
-                abm.message.append(Plain(text=text))
-                message_str += text
+                for m in m_group:
+                    text = m["data"].get("markdown") or m["data"].get("content", "")
+                    abm.message.append(Plain(text=text))
+                    message_str += text
             else:
                 for m in m_group:
                     try:
@@ -431,17 +436,52 @@ class AiocqhttpAdapter(Platform):
         self.shutdown_event = asyncio.Event()
         return coro
 
-    async def terminate(self):
-        self.shutdown_event.set()
+    async def terminate(self) -> None:
+        if hasattr(self, "shutdown_event"):
+            self.shutdown_event.set()
+        await self._close_reverse_ws_connections()
 
-    async def shutdown_trigger_placeholder(self):
+    async def _close_reverse_ws_connections(self) -> None:
+        api_clients = getattr(self.bot, "_wsr_api_clients", None)
+        event_clients = getattr(self.bot, "_wsr_event_clients", None)
+
+        ws_clients: set[Any] = set()
+        if isinstance(api_clients, dict):
+            ws_clients.update(api_clients.values())
+        if isinstance(event_clients, set):
+            ws_clients.update(event_clients)
+
+        close_tasks: list[Awaitable[Any]] = []
+        for ws in ws_clients:
+            close_func = getattr(ws, "close", None)
+            if not callable(close_func):
+                continue
+            try:
+                close_result = close_func(code=1000, reason="Adapter shutdown")
+            except TypeError:
+                close_result = close_func()
+            except Exception:
+                continue
+
+            if inspect.isawaitable(close_result):
+                close_tasks.append(close_result)
+
+        if close_tasks:
+            await asyncio.gather(*close_tasks, return_exceptions=True)
+
+        if isinstance(api_clients, dict):
+            api_clients.clear()
+        if isinstance(event_clients, set):
+            event_clients.clear()
+
+    async def shutdown_trigger_placeholder(self) -> None:
         await self.shutdown_event.wait()
         logger.info("aiocqhttp 适配器已被关闭")
 
     def meta(self) -> PlatformMetadata:
         return self.metadata
 
-    async def handle_msg(self, message: AstrBotMessage):
+    async def handle_msg(self, message: AstrBotMessage) -> None:
         message_event = AiocqhttpMessageEvent(
             message_str=message.message_str,
             message_obj=message,

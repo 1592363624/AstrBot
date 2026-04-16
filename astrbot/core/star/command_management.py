@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
+from astrbot.api import sp
 from astrbot.core import db_helper, logger
 from astrbot.core.db.po import CommandConfig
 from astrbot.core.star.filter.command import CommandFilter
@@ -90,6 +91,7 @@ async def toggle_command(handler_full_name: str, enabled: bool) -> CommandDescri
 async def rename_command(
     handler_full_name: str,
     new_fragment: str,
+    aliases: list[str] | None = None,
 ) -> CommandDescriptor:
     descriptor = _build_descriptor_by_full_name(handler_full_name)
     if not descriptor:
@@ -99,9 +101,24 @@ async def rename_command(
     if not new_fragment:
         raise ValueError("指令名不能为空。")
 
+    # 校验主指令名
     candidate_full = _compose_command(descriptor.parent_signature, new_fragment)
     if _is_command_in_use(handler_full_name, candidate_full):
-        raise ValueError("新的指令名已被其他指令占用，请换一个名称。")
+        raise ValueError(f"指令名 '{candidate_full}' 已被其他指令占用。")
+
+    # 校验别名
+    if aliases:
+        for alias in aliases:
+            alias = alias.strip()
+            if not alias:
+                continue
+            alias_full = _compose_command(descriptor.parent_signature, alias)
+            if _is_command_in_use(handler_full_name, alias_full):
+                raise ValueError(f"别名 '{alias_full}' 已被其他指令占用。")
+
+    existing_cfg = await db_helper.get_command_config(handler_full_name)
+    merged_extra = dict(existing_cfg.extra_data or {}) if existing_cfg else {}
+    merged_extra["resolved_aliases"] = aliases or []
 
     config = await db_helper.upsert_command_config(
         handler_full_name=handler_full_name,
@@ -114,13 +131,58 @@ async def rename_command(
         conflict_key=descriptor.original_command,
         resolution_strategy="manual_rename",
         note=None,
-        extra_data=None,
+        extra_data=merged_extra,
         auto_managed=False,
     )
     _bind_descriptor_with_config(descriptor, config)
 
     await sync_command_configs()
     return descriptor
+
+
+async def update_command_permission(
+    handler_full_name: str,
+    permission_type: str,
+) -> CommandDescriptor:
+    descriptor = _build_descriptor_by_full_name(handler_full_name)
+    if not descriptor:
+        raise ValueError("指定的处理函数不存在或不是指令。")
+
+    if permission_type not in ["admin", "member"]:
+        raise ValueError("权限类型必须为 admin 或 member。")
+
+    handler = descriptor.handler
+    found_plugin = star_map.get(handler.handler_module_path)
+    if not found_plugin:
+        raise ValueError("未找到指令所属插件")
+
+    # 1. Update Persistent Config (alter_cmd)
+    alter_cmd_cfg = await sp.global_get("alter_cmd", {})
+    plugin_ = alter_cmd_cfg.get(found_plugin.name, {})
+    cfg = plugin_.get(handler.handler_name, {})
+    cfg["permission"] = permission_type
+    plugin_[handler.handler_name] = cfg
+    alter_cmd_cfg[found_plugin.name] = plugin_
+
+    await sp.global_put("alter_cmd", alter_cmd_cfg)
+
+    # 2. Update Runtime Filter
+    found_permission_filter = False
+    target_perm_type = (
+        PermissionType.ADMIN if permission_type == "admin" else PermissionType.MEMBER
+    )
+
+    for filter_ in handler.event_filters:
+        if isinstance(filter_, PermissionTypeFilter):
+            filter_.permission_type = target_perm_type
+            found_permission_filter = True
+            break
+
+    if not found_permission_filter:
+        handler.event_filters.insert(0, PermissionTypeFilter(target_perm_type))
+
+    # Re-build descriptor to reflect changes
+    return _build_descriptor(handler) or descriptor
 
 
 async def list_commands() -> list[dict[str, Any]]:
@@ -287,7 +349,7 @@ def _locate_primary_filter(
     handler: StarHandlerMetadata,
 ) -> CommandFilter | CommandGroupFilter | None:
     for filter_ref in handler.event_filters:
-        if isinstance(filter_ref, (CommandFilter, CommandGroupFilter)):
+        if isinstance(filter_ref, CommandFilter | CommandGroupFilter):
             return filter_ref
     return None
 
@@ -363,14 +425,27 @@ def _apply_config_to_descriptor(
         new_fragment,
     )
 
+    extra = config.extra_data or {}
+    resolved_aliases = extra.get("resolved_aliases")
+    if isinstance(resolved_aliases, list):
+        descriptor.aliases = [str(x) for x in resolved_aliases if str(x).strip()]
+
 
 def _apply_config_to_runtime(
     descriptor: CommandDescriptor,
     config: CommandConfig,
 ) -> None:
     descriptor.handler.enabled = config.enabled
-    if descriptor.filter_ref and descriptor.current_fragment:
-        _set_filter_fragment(descriptor.filter_ref, descriptor.current_fragment)
+    if descriptor.filter_ref:
+        if descriptor.current_fragment:
+            _set_filter_fragment(descriptor.filter_ref, descriptor.current_fragment)
+        extra = config.extra_data or {}
+        resolved_aliases = extra.get("resolved_aliases")
+        if isinstance(resolved_aliases, list):
+            _set_filter_aliases(
+                descriptor.filter_ref,
+                [str(x) for x in resolved_aliases if str(x).strip()],
+            )
 
 
 def _bind_configs_to_descriptors(
@@ -405,6 +480,18 @@ def _set_filter_fragment(
     if fragment == current_value:
         return
     setattr(filter_ref, attr, fragment)
+    if hasattr(filter_ref, "_cmpl_cmd_names"):
+        filter_ref._cmpl_cmd_names = None
+
+
+def _set_filter_aliases(
+    filter_ref: CommandFilter | CommandGroupFilter,
+    aliases: list[str],
+) -> None:
+    current_aliases = getattr(filter_ref, "alias", set())
+    if set(aliases) == current_aliases:
+        return
+    setattr(filter_ref, "alias", set(aliases))
     if hasattr(filter_ref, "_cmpl_cmd_names"):
         filter_ref._cmpl_cmd_names = None
 

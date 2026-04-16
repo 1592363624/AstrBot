@@ -1,13 +1,17 @@
 import asyncio
+import hashlib
 import logging
 import os
 import socket
-from typing import cast
+from datetime import datetime
+from pathlib import Path
+from typing import Protocol, cast
 
 import jwt
 import psutil
 from flask.json.provider import DefaultJSONProvider
-from psutil._common import addr as psutil_addr
+from hypercorn.asyncio import serve
+from hypercorn.config import Config as HyperConfig
 from quart import Quart, g, jsonify, request
 from quart.logging import default_handler
 
@@ -16,15 +20,41 @@ from astrbot.core.config.default import VERSION
 from astrbot.core.core_lifecycle import AstrBotCoreLifecycle
 from astrbot.core.db import BaseDatabase
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+from astrbot.core.utils.datetime_utils import to_utc_isoformat
 from astrbot.core.utils.io import get_local_ip_addresses
 
 from .routes import *
+from .routes.api_key import ALL_OPEN_API_SCOPES
+from .routes.backup import BackupRoute
+from .routes.live_chat import LiveChatRoute
 from .routes.platform import PlatformRoute
 from .routes.route import Response, RouteContext
 from .routes.session_management import SessionManagementRoute
+from .routes.subagent import SubAgentRoute
 from .routes.t2i import T2iRoute
 
+# Static assets shipped inside the wheel (built during `hatch build`).
+_BUNDLED_DIST = Path(__file__).parent / "dist"
+
+
+class _AddrWithPort(Protocol):
+    port: int
+
+
 APP: Quart
+
+
+def _parse_env_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+class AstrBotJSONProvider(DefaultJSONProvider):
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return to_utc_isoformat(obj)
+        return super().default(obj)
 
 
 class AstrBotDashboard:
@@ -37,21 +67,32 @@ class AstrBotDashboard:
     ) -> None:
         self.core_lifecycle = core_lifecycle
         self.config = core_lifecycle.astrbot_config
+        self.db = db
 
-        # 参数指定webui目录
+        # Path priority:
+        # 1. Explicit webui_dir argument
+        # 2. data/dist/ (user-installed / manually updated dashboard)
+        # 3. astrbot/dashboard/dist/ (bundled with the wheel)
         if webui_dir and os.path.exists(webui_dir):
             self.data_path = os.path.abspath(webui_dir)
         else:
-            self.data_path = os.path.abspath(
-                os.path.join(get_astrbot_data_path(), "dist"),
-            )
+            user_dist = os.path.join(get_astrbot_data_path(), "dist")
+            if os.path.exists(user_dist):
+                self.data_path = os.path.abspath(user_dist)
+            elif _BUNDLED_DIST.exists():
+                self.data_path = str(_BUNDLED_DIST)
+                logger.info("Using bundled dashboard dist: %s", self.data_path)
+            else:
+                # Fall back to expected user path (will fail gracefully later)
+                self.data_path = os.path.abspath(user_dist)
 
         self.app = Quart("dashboard", static_folder=self.data_path, static_url_path="/")
         APP = self.app  # noqa
         self.app.config["MAX_CONTENT_LENGTH"] = (
             128 * 1024 * 1024
         )  # 将 Flask 允许的最大上传文件体大小设置为 128 MB
-        cast(DefaultJSONProvider, self.app.json).sort_keys = False
+        self.app.json = AstrBotJSONProvider(self.app)
+        self.app.json.sort_keys = False
         self.app.before_request(self.auth_middleware)
         # token 用于验证请求
         logging.getLogger(self.app.name).removeHandler(default_handler)
@@ -72,8 +113,18 @@ class AstrBotDashboard:
         self.lr = LogRoute(self.context, core_lifecycle.log_broker)
         self.sfr = StaticFileRoute(self.context)
         self.ar = AuthRoute(self.context)
+        self.api_key_route = ApiKeyRoute(self.context, db)
         self.chat_route = ChatRoute(self.context, db, core_lifecycle)
+        self.open_api_route = OpenApiRoute(
+            self.context,
+            db,
+            core_lifecycle,
+            self.chat_route,
+        )
+        self.chatui_project_route = ChatUIProjectRoute(self.context, db)
         self.tools_root = ToolsRoute(self.context, core_lifecycle)
+        self.subagent_route = SubAgentRoute(self.context, core_lifecycle)
+        self.skills_route = SkillsRoute(self.context, core_lifecycle)
         self.conversation_route = ConversationRoute(self.context, db, core_lifecycle)
         self.file_route = FileRoute(self.context)
         self.session_management_route = SessionManagementRoute(
@@ -82,9 +133,12 @@ class AstrBotDashboard:
             core_lifecycle,
         )
         self.persona_route = PersonaRoute(self.context, db, core_lifecycle)
+        self.cron_route = CronRoute(self.context, core_lifecycle)
         self.t2i_route = T2iRoute(self.context, core_lifecycle)
         self.kb_route = KnowledgeBaseRoute(self.context, core_lifecycle)
         self.platform_route = PlatformRoute(self.context, core_lifecycle)
+        self.backup_route = BackupRoute(self.context, db, core_lifecycle)
+        self.live_chat_route = LiveChatRoute(self.context, db, core_lifecycle)
 
         self.app.add_url_rule(
             "/api/plug/<path:subpath>",
@@ -108,7 +162,47 @@ class AstrBotDashboard:
     async def auth_middleware(self):
         if not request.path.startswith("/api"):
             return None
-        allowed_endpoints = ["/api/auth/login", "/api/file", "/api/platform/webhook"]
+        if request.path.startswith("/api/v1"):
+            raw_key = self._extract_raw_api_key()
+            if not raw_key:
+                r = jsonify(Response().error("Missing API key").__dict__)
+                r.status_code = 401
+                return r
+            key_hash = hashlib.pbkdf2_hmac(
+                "sha256",
+                raw_key.encode("utf-8"),
+                b"astrbot_api_key",
+                100_000,
+            ).hex()
+            api_key = await self.db.get_active_api_key_by_hash(key_hash)
+            if not api_key:
+                r = jsonify(Response().error("Invalid API key").__dict__)
+                r.status_code = 401
+                return r
+
+            if isinstance(api_key.scopes, list):
+                scopes = api_key.scopes
+            else:
+                scopes = list(ALL_OPEN_API_SCOPES)
+            required_scope = self._get_required_open_api_scope(request.path)
+            if required_scope and "*" not in scopes and required_scope not in scopes:
+                r = jsonify(Response().error("Insufficient API key scope").__dict__)
+                r.status_code = 403
+                return r
+
+            g.api_key_id = api_key.key_id
+            g.api_key_scopes = scopes
+            g.username = f"api_key:{api_key.key_id}"
+            await self.db.touch_api_key(api_key.key_id)
+            return None
+
+        allowed_endpoints = [
+            "/api/auth/login",
+            "/api/file",
+            "/api/platform/webhook",
+            "/api/stat/start-time",
+            "/api/backup/download",  # 备份下载使用 URL 参数传递 token
+        ]
         if any(request.path.startswith(prefix) for prefix in allowed_endpoints):
             return None
         # 声明 JWT
@@ -129,6 +223,34 @@ class AstrBotDashboard:
             r = jsonify(Response().error("Token 无效").__dict__)
             r.status_code = 401
             return r
+
+    @staticmethod
+    def _extract_raw_api_key() -> str | None:
+        if key := request.args.get("api_key"):
+            return key.strip()
+        if key := request.args.get("key"):
+            return key.strip()
+        if key := request.headers.get("X-API-Key"):
+            return key.strip()
+        auth_header = request.headers.get("Authorization", "").strip()
+        if auth_header.startswith("Bearer "):
+            return auth_header.removeprefix("Bearer ").strip()
+        if auth_header.startswith("ApiKey "):
+            return auth_header.removeprefix("ApiKey ").strip()
+        return None
+
+    @staticmethod
+    def _get_required_open_api_scope(path: str) -> str | None:
+        scope_map = {
+            "/api/v1/chat": "chat",
+            "/api/v1/chat/ws": "chat",
+            "/api/v1/chat/sessions": "chat",
+            "/api/v1/configs": "config",
+            "/api/v1/file": "file",
+            "/api/v1/im/message": "im",
+            "/api/v1/im/bots": "im",
+        }
+        return scope_map.get(path)
 
     def check_port_in_use(self, port: int) -> bool:
         """跨平台检测端口是否被占用"""
@@ -151,7 +273,7 @@ class AstrBotDashboard:
         """获取占用端口的进程详细信息"""
         try:
             for conn in psutil.net_connections(kind="inet"):
-                if cast(psutil_addr, conn.laddr).port == port:
+                if cast(_AddrWithPort, conn.laddr).port == port:
                     try:
                         process = psutil.Process(conn.pid)
                         # 获取详细信息
@@ -169,7 +291,7 @@ class AstrBotDashboard:
         except Exception as e:
             return f"获取进程信息失败: {e!s}"
 
-    def _init_jwt_secret(self):
+    def _init_jwt_secret(self) -> None:
         if not self.config.get("dashboard", {}).get("jwt_secret", None):
             # 如果没有设置 JWT 密钥，则生成一个新的密钥
             jwt_secret = os.urandom(32).hex()
@@ -178,21 +300,95 @@ class AstrBotDashboard:
             logger.info("Initialized random JWT secret for dashboard.")
         self._jwt_secret = self.config["dashboard"]["jwt_secret"]
 
+    @staticmethod
+    def _resolve_dashboard_ssl_config(
+        ssl_config: dict,
+    ) -> tuple[bool, dict[str, str]]:
+        cert_file = (
+            os.environ.get("DASHBOARD_SSL_CERT")
+            or os.environ.get("ASTRBOT_DASHBOARD_SSL_CERT")
+            or ssl_config.get("cert_file", "")
+        )
+        key_file = (
+            os.environ.get("DASHBOARD_SSL_KEY")
+            or os.environ.get("ASTRBOT_DASHBOARD_SSL_KEY")
+            or ssl_config.get("key_file", "")
+        )
+        ca_certs = (
+            os.environ.get("DASHBOARD_SSL_CA_CERTS")
+            or os.environ.get("ASTRBOT_DASHBOARD_SSL_CA_CERTS")
+            or ssl_config.get("ca_certs", "")
+        )
+
+        if not cert_file or not key_file:
+            logger.warning(
+                "dashboard.ssl.enable 已启用，但未同时配置 cert_file 和 key_file，SSL 配置将不会生效。",
+            )
+            return False, {}
+
+        cert_path = Path(cert_file).expanduser()
+        key_path = Path(key_file).expanduser()
+        if not cert_path.is_file():
+            logger.warning(
+                f"dashboard.ssl.enable 已启用，但 SSL 证书文件不存在: {cert_path}，SSL 配置将不会生效。",
+            )
+            return False, {}
+        if not key_path.is_file():
+            logger.warning(
+                f"dashboard.ssl.enable 已启用，但 SSL 私钥文件不存在: {key_path}，SSL 配置将不会生效。",
+            )
+            return False, {}
+
+        resolved_ssl_config = {
+            "certfile": str(cert_path.resolve()),
+            "keyfile": str(key_path.resolve()),
+        }
+
+        if ca_certs:
+            ca_path = Path(ca_certs).expanduser()
+            if not ca_path.is_file():
+                logger.warning(
+                    f"dashboard.ssl.enable 已启用，但 SSL CA 证书文件不存在: {ca_path}，SSL 配置将不会生效。",
+                )
+                return False, {}
+            resolved_ssl_config["ca_certs"] = str(ca_path.resolve())
+
+        return True, resolved_ssl_config
+
     def run(self):
         ip_addr = []
-        if p := os.environ.get("DASHBOARD_PORT"):
-            port = p
-        else:
-            port = self.core_lifecycle.astrbot_config["dashboard"].get("port", 6185)
-        host = self.core_lifecycle.astrbot_config["dashboard"].get("host", "0.0.0.0")
-        enable = self.core_lifecycle.astrbot_config["dashboard"].get("enable", True)
+        dashboard_config = self.core_lifecycle.astrbot_config.get("dashboard", {})
+        port = (
+            os.environ.get("DASHBOARD_PORT")
+            or os.environ.get("ASTRBOT_DASHBOARD_PORT")
+            or dashboard_config.get("port", 6185)
+        )
+        host = (
+            os.environ.get("DASHBOARD_HOST")
+            or os.environ.get("ASTRBOT_DASHBOARD_HOST")
+            or dashboard_config.get("host", "0.0.0.0")
+        )
+        enable = dashboard_config.get("enable", True)
+        ssl_config = dashboard_config.get("ssl", {})
+        if not isinstance(ssl_config, dict):
+            ssl_config = {}
+        ssl_enable = _parse_env_bool(
+            os.environ.get("DASHBOARD_SSL_ENABLE")
+            or os.environ.get("ASTRBOT_DASHBOARD_SSL_ENABLE"),
+            bool(ssl_config.get("enable", False)),
+        )
+        resolved_ssl_config: dict[str, str] = {}
+        if ssl_enable:
+            ssl_enable, resolved_ssl_config = self._resolve_dashboard_ssl_config(
+                ssl_config,
+            )
+        scheme = "https" if ssl_enable else "http"
 
         if not enable:
             logger.info("WebUI 已被禁用")
             return None
 
-        logger.info(f"正在启动 WebUI, 监听地址: http://{host}:{port}")
-
+        logger.info(f"正在启动 WebUI, 监听地址: {scheme}://{host}:{port}")
         if host == "0.0.0.0":
             logger.info(
                 "提示: WebUI 将监听所有网络接口，请注意安全。（可在 data/cmd_config.json 中配置 dashboard.host 以修改 host）",
@@ -220,9 +416,9 @@ class AstrBotDashboard:
             raise Exception(f"端口 {port} 已被占用")
 
         parts = [f"\n ✨✨✨\n  AstrBot v{VERSION} WebUI 已启动，可访问\n\n"]
-        parts.append(f"   ➜  本地: http://localhost:{port}\n")
+        parts.append(f"   ➜  本地: {scheme}://localhost:{port}\n")
         for ip in ip_addr:
-            parts.append(f"   ➜  网络: http://{ip}:{port}\n")
+            parts.append(f"   ➜  网络: {scheme}://{ip}:{port}\n")
         parts.append("   ➜  默认用户名和密码: astrbot\n ✨✨✨\n")
         display = "".join(parts)
 
@@ -233,12 +429,26 @@ class AstrBotDashboard:
 
         logger.info(display)
 
-        return self.app.run_task(
-            host=host,
-            port=port,
-            shutdown_trigger=self.shutdown_trigger,
-        )
+        # 配置 Hypercorn
+        config = HyperConfig()
+        config.bind = [f"{host}:{port}"]
+        if ssl_enable:
+            config.certfile = resolved_ssl_config["certfile"]
+            config.keyfile = resolved_ssl_config["keyfile"]
+            if "ca_certs" in resolved_ssl_config:
+                config.ca_certs = resolved_ssl_config["ca_certs"]
 
-    async def shutdown_trigger(self):
+        # 根据配置决定是否禁用访问日志
+        disable_access_log = dashboard_config.get("disable_access_log", True)
+        if disable_access_log:
+            config.accesslog = None
+        else:
+            # 启用访问日志，使用简洁格式
+            config.accesslog = "-"
+            config.access_log_format = "%(h)s %(r)s %(s)s %(b)s %(D)s"
+
+        return serve(self.app, config, shutdown_trigger=self.shutdown_trigger)
+
+    async def shutdown_trigger(self) -> None:
         await self.shutdown_event.wait()
-        logger.info("AstrBot WebUI 已经被优雅地关闭")
+        logger.info("AstrBot WebUI 已经被关闭")

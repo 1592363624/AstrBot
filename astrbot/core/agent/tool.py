@@ -1,3 +1,4 @@
+import copy
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any, Generic
 
@@ -57,8 +58,13 @@ class FunctionTool(ToolSchema, Generic[TContext]):
     Whether the tool is active. This field is a special field for AstrBot.
     You can ignore it when integrating with other frameworks.
     """
+    is_background_task: bool = False
+    """
+    Declare this tool as a background task. Background tasks return immediately
+    with a task identifier while the real work continues asynchronously.
+    """
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"FuncTool(name={self.name}, parameters={self.parameters}, description={self.description})"
 
     async def call(self, context: ContextWrapper[TContext], **kwargs) -> ToolExecResult:
@@ -82,16 +88,26 @@ class ToolSet:
         """Check if the tool set is empty."""
         return len(self.tools) == 0
 
-    def add_tool(self, tool: FunctionTool):
-        """Add a tool to the set."""
-        # 检查是否已存在同名工具
+    def add_tool(self, tool: FunctionTool) -> None:
+        """Add a tool to the set.
+
+        If a tool with the same name already exists:
+        - Prefer the one that is active (active=True)
+        - If both have the same active state, use the new one (overwrite)
+        """
         for i, existing_tool in enumerate(self.tools):
             if existing_tool.name == tool.name:
-                self.tools[i] = tool
+                # Use getattr with a default of True for compatibility with tools
+                # that may not define an `active` attribute (e.g., mocks).
+                existing_active = bool(getattr(existing_tool, "active", True))
+                new_active = bool(getattr(tool, "active", True))
+                # Overwrite if new tool is active, or if existing tool is not active
+                if new_active or not existing_active:
+                    self.tools[i] = tool
                 return
         self.tools.append(tool)
 
-    def remove_tool(self, name: str):
+    def remove_tool(self, name: str) -> None:
         """Remove a tool by its name."""
         self.tools = [tool for tool in self.tools if tool.name != name]
 
@@ -102,6 +118,47 @@ class ToolSet:
                 return tool
         return None
 
+    def get_light_tool_set(self) -> "ToolSet":
+        """Return a light tool set with only name/description."""
+        light_tools = []
+        for tool in self.tools:
+            if hasattr(tool, "active") and not tool.active:
+                continue
+            light_params = {
+                "type": "object",
+                "properties": {},
+            }
+            light_tools.append(
+                FunctionTool(
+                    name=tool.name,
+                    parameters=light_params,
+                    description=tool.description,
+                    handler=None,
+                )
+            )
+        return ToolSet(light_tools)
+
+    def get_param_only_tool_set(self) -> "ToolSet":
+        """Return a tool set with name/parameters only (no description)."""
+        param_tools = []
+        for tool in self.tools:
+            if hasattr(tool, "active") and not tool.active:
+                continue
+            params = (
+                copy.deepcopy(tool.parameters)
+                if tool.parameters
+                else {"type": "object", "properties": {}}
+            )
+            param_tools.append(
+                FunctionTool(
+                    name=tool.name,
+                    parameters=params,
+                    description="",
+                    handler=None,
+                )
+            )
+        return ToolSet(param_tools)
+
     @deprecated(reason="Use add_tool() instead", version="4.0.0")
     def add_func(
         self,
@@ -109,7 +166,7 @@ class ToolSet:
         func_args: list,
         desc: str,
         handler: Callable[..., Awaitable[Any]],
-    ):
+    ) -> None:
         """Add a function tool to the set."""
         params = {
             "type": "object",  # hard-coded here
@@ -129,7 +186,7 @@ class ToolSet:
         self.add_tool(_func)
 
     @deprecated(reason="Use remove_tool() instead", version="4.0.0")
-    def remove_func(self, name: str):
+    def remove_func(self, name: str) -> None:
         """Remove a function tool by its name."""
         self.remove_tool(name)
 
@@ -147,18 +204,15 @@ class ToolSet:
         """Convert tools to OpenAI API function calling schema format."""
         result = []
         for tool in self.tools:
-            func_def = {
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                },
-            }
+            func_def = {"type": "function", "function": {"name": tool.name}}
+            if tool.description:
+                func_def["function"]["description"] = tool.description
 
-            if (
-                tool.parameters and tool.parameters.get("properties")
-            ) or not omit_empty_parameter_field:
-                func_def["function"]["parameters"] = tool.parameters
+            if tool.parameters is not None:
+                if (
+                    tool.parameters and tool.parameters.get("properties")
+                ) or not omit_empty_parameter_field:
+                    func_def["function"]["parameters"] = tool.parameters
 
             result.append(func_def)
         return result
@@ -171,11 +225,9 @@ class ToolSet:
             if tool.parameters:
                 input_schema["properties"] = tool.parameters.get("properties", {})
                 input_schema["required"] = tool.parameters.get("required", [])
-            tool_def = {
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": input_schema,
-            }
+            tool_def = {"name": tool.name, "input_schema": input_schema}
+            if tool.description:
+                tool_def["description"] = tool.description
             result.append(tool_def)
         return result
 
@@ -204,8 +256,18 @@ class ToolSet:
 
             result = {}
 
-            if "type" in schema and schema["type"] in supported_types:
-                result["type"] = schema["type"]
+            # Avoid side effects by not modifying the original schema
+            origin_type = schema.get("type")
+            target_type = origin_type
+
+            # Compatibility fix: Gemini API expects 'type' to be a string (enum),
+            # but standard JSON Schema (MCP) allows lists (e.g. ["string", "null"]).
+            # We fallback to the first non-null type.
+            if isinstance(origin_type, list):
+                target_type = next((t for t in origin_type if t != "null"), "string")
+
+            if target_type in supported_types:
+                result["type"] = target_type
                 if "format" in schema and schema["format"] in supported_formats.get(
                     result["type"],
                     set(),
@@ -233,22 +295,31 @@ class ToolSet:
                     prop_value = convert_schema(value)
                     if "default" in prop_value:
                         del prop_value["default"]
+                    # see #5217
+                    if "additionalProperties" in prop_value:
+                        del prop_value["additionalProperties"]
                     properties[key] = prop_value
 
                 if properties:
                     result["properties"] = properties
 
-            if "items" in schema:
-                result["items"] = convert_schema(schema["items"])
+            if target_type == "array":
+                items_schema = schema.get("items")
+                if isinstance(items_schema, dict):
+                    result["items"] = convert_schema(items_schema)
+                else:
+                    # Gemini requires array schemas to include an `items` schema.
+                    # JSON Schema allows omitting it, so fall back to a permissive
+                    # string item schema instead of emitting an invalid declaration.
+                    result["items"] = {"type": "string"}
 
             return result
 
         tools = []
         for tool in self.tools:
-            d: dict[str, Any] = {
-                "name": tool.name,
-                "description": tool.description,
-            }
+            d: dict[str, Any] = {"name": tool.name}
+            if tool.description:
+                d["description"] = tool.description
             if tool.parameters:
                 d["parameters"] = convert_schema(tool.parameters)
             tools.append(d)
@@ -274,17 +345,22 @@ class ToolSet:
         """获取所有工具的名称列表"""
         return [tool.name for tool in self.tools]
 
-    def __len__(self):
+    def merge(self, other: "ToolSet") -> None:
+        """Merge another ToolSet into this one."""
+        for tool in other.tools:
+            self.add_tool(tool)
+
+    def __len__(self) -> int:
         return len(self.tools)
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return len(self.tools) > 0
 
     def __iter__(self):
         return iter(self.tools)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"ToolSet(tools={self.tools})"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"ToolSet(tools={self.tools})"

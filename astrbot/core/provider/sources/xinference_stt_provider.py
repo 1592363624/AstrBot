@@ -7,8 +7,11 @@ from xinference_client.client.restful.async_restful_client import (
 )
 
 from astrbot.core import logger
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-from astrbot.core.utils.tencent_record_helper import tencent_silk_to_wav
+from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
+from astrbot.core.utils.tencent_record_helper import (
+    convert_to_pcm_wav,
+    tencent_silk_to_wav,
+)
 
 from ..entities import ProviderType
 from ..provider import STTProvider
@@ -37,7 +40,7 @@ class ProviderXinferenceSTT(STTProvider):
         self.client = None
         self.model_uid = None
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         if self.api_key:
             logger.info("Xinference STT: Using API key for authentication.")
             self.client = Client(self.base_url, api_key=self.api_key)
@@ -111,29 +114,44 @@ class ProviderXinferenceSTT(STTProvider):
                 return ""
 
             # 2. Check for conversion
-            needs_conversion = False
-            if (
-                audio_url.endswith((".amr", ".silk"))
-                or is_tencent
-                or b"SILK" in audio_bytes[:8]
-            ):
-                needs_conversion = True
+            conversion_type = None
+
+            if b"SILK" in audio_bytes[:8]:
+                conversion_type = "silk"
+            elif b"#!AMR" in audio_bytes[:6]:
+                conversion_type = "amr"
+            elif audio_url.endswith(".silk") or is_tencent:
+                conversion_type = "silk"
+            elif audio_url.endswith(".amr"):
+                conversion_type = "amr"
 
             # 3. Perform conversion if needed
-            if needs_conversion:
-                logger.info("Audio requires conversion, using temporary files...")
-                temp_dir = os.path.join(get_astrbot_data_path(), "temp")
+            if conversion_type:
+                logger.info(
+                    f"Audio requires conversion ({conversion_type}), using temporary files..."
+                )
+                temp_dir = get_astrbot_temp_path()
                 os.makedirs(temp_dir, exist_ok=True)
 
-                input_path = os.path.join(temp_dir, str(uuid.uuid4()))
-                output_path = os.path.join(temp_dir, str(uuid.uuid4()) + ".wav")
+                input_path = os.path.join(
+                    temp_dir,
+                    f"xinference_stt_{uuid.uuid4().hex[:8]}.input",
+                )
+                output_path = os.path.join(
+                    temp_dir,
+                    f"xinference_stt_{uuid.uuid4().hex[:8]}.wav",
+                )
                 temp_files.extend([input_path, output_path])
 
                 with open(input_path, "wb") as f:
                     f.write(audio_bytes)
 
-                logger.info("Converting silk/amr file to wav ...")
-                await tencent_silk_to_wav(input_path, output_path)
+                if conversion_type == "silk":
+                    logger.info("Converting silk to wav ...")
+                    await tencent_silk_to_wav(input_path, output_path)
+                elif conversion_type == "amr":
+                    logger.info("Converting amr to wav ...")
+                    await convert_to_pcm_wav(input_path, output_path)
 
                 with open(output_path, "rb") as f:
                     audio_bytes = f.read()

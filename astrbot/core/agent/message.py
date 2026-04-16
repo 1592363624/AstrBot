@@ -3,7 +3,13 @@
 
 from typing import Any, ClassVar, Literal, cast
 
-from pydantic import BaseModel, GetCoreSchemaHandler, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    GetCoreSchemaHandler,
+    PrivateAttr,
+    model_serializer,
+    model_validator,
+)
 from pydantic_core import core_schema
 
 
@@ -12,7 +18,7 @@ class ContentPart(BaseModel):
 
     __content_part_registry: ClassVar[dict[str, type["ContentPart"]]] = {}
 
-    type: str
+    type: Literal["text", "think", "image_url", "audio_url"]
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -61,6 +67,28 @@ class TextPart(ContentPart):
 
     type: str = "text"
     text: str
+
+
+class ThinkPart(ContentPart):
+    """
+    >>> ThinkPart(think="I think I need to think about this.").model_dump()
+    {'type': 'think', 'think': 'I think I need to think about this.', 'encrypted': None}
+    """
+
+    type: str = "think"
+    think: str
+    encrypted: str | None = None
+    """Encrypted thinking content, or signature."""
+
+    def merge_in_place(self, other: Any) -> bool:
+        if not isinstance(other, ThinkPart):
+            return False
+        if self.encrypted:
+            return False
+        self.think += other.think
+        if other.encrypted:
+            self.encrypted = other.encrypted
+        return True
 
 
 class ImageURLPart(ContentPart):
@@ -156,6 +184,8 @@ class Message(BaseModel):
     tool_call_id: str | None = None
     """The ID of the tool call."""
 
+    _no_save: bool = PrivateAttr(default=False)
+
     @model_validator(mode="after")
     def check_content_required(self):
         # assistant + tool_calls is not None: allow content to be None
@@ -168,6 +198,15 @@ class Message(BaseModel):
                 "content is required unless role='assistant' and tool_calls is not None"
             )
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        if self.tool_calls is None:
+            data.pop("tool_calls", None)
+        if self.tool_call_id is None:
+            data.pop("tool_call_id", None)
+        return data
 
 
 class AssistantMessageSegment(Message):

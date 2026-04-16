@@ -1,7 +1,11 @@
 import asyncio
 import logging
+import os
+import re
+import sys
 from contextlib import AsyncExitStack
 from datetime import timedelta
+from pathlib import Path, PureWindowsPath
 from typing import Generic
 
 from tenacity import (
@@ -18,6 +22,75 @@ from astrbot.core.utils.log_pipe import LogPipe
 
 from .run_context import TContext
 from .tool import FunctionTool
+
+_DEFAULT_STDIO_COMMAND_ALLOWLIST = frozenset(
+    {
+        "python",
+        "python3",
+        "py",
+        "node",
+        "npx",
+        "npm",
+        "pnpm",
+        "yarn",
+        "bun",
+        "bunx",
+        "deno",
+        "uv",
+        "uvx",
+    }
+)
+_DENIED_STDIO_COMMANDS = frozenset(
+    {
+        "bash",
+        "sh",
+        "zsh",
+        "fish",
+        "cmd",
+        "cmd.exe",
+        "powershell",
+        "powershell.exe",
+        "pwsh",
+        "pwsh.exe",
+        "osascript",
+        "open",
+        "curl",
+        "wget",
+        "nc",
+        "netcat",
+        "telnet",
+        "ssh",
+        "scp",
+        "rm",
+        "mv",
+        "cp",
+        "dd",
+        "mkfs",
+        "sudo",
+        "su",
+        "chmod",
+        "chown",
+        "kill",
+        "killall",
+        "shutdown",
+        "reboot",
+        "poweroff",
+        "halt",
+    }
+)
+_SHELL_META_RE = re.compile(r"[\r\n\x00;&|<>`$]")
+_PYTHON_INLINE_CODE_FLAGS = frozenset({"-c"})
+_JS_INLINE_CODE_FLAGS = frozenset({"-e", "--eval", "-p", "--print"})
+_DENIED_DOCKER_ARGS = frozenset(
+    {
+        "--privileged",
+        "--pid=host",
+        "--network=host",
+        "--net=host",
+        "--ipc=host",
+    }
+)
+_STDIO_ALLOWLIST_ENV = "ASTRBOT_MCP_STDIO_ALLOWED_COMMANDS"
 
 try:
     import anyio
@@ -40,9 +113,154 @@ def _prepare_config(config: dict) -> dict:
     """Prepare configuration, handle nested format"""
     if config.get("mcpServers"):
         first_key = next(iter(config["mcpServers"]))
-        config = config["mcpServers"][first_key]
+        config = dict(config["mcpServers"][first_key])
+    else:
+        config = dict(config)
     config.pop("active", None)
     return config
+
+
+def _normalize_stdio_command_name(command: str) -> str:
+    command = command.strip()
+    if "\\" in command:
+        command_name = PureWindowsPath(command).name
+    else:
+        command_name = Path(command).name
+    command_name = command_name.lower()
+    for suffix in (".exe", ".cmd", ".bat"):
+        if command_name.endswith(suffix):
+            return command_name[: -len(suffix)]
+    return command_name
+
+
+def _get_stdio_command_allowlist() -> set[str]:
+    allowed = set(_DEFAULT_STDIO_COMMAND_ALLOWLIST)
+    configured = os.environ.get(_STDIO_ALLOWLIST_ENV, "")
+    if configured.strip():
+        allowed = {
+            _normalize_stdio_command_name(item)
+            for item in configured.split(",")
+            if item.strip()
+        }
+    return allowed
+
+
+def _is_stdio_config(config: dict) -> bool:
+    cfg = _prepare_config(config.copy())
+    return "url" not in cfg
+
+
+def _validate_stdio_args(command_name: str, args: object) -> None:
+    if args is None:
+        return
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+        raise ValueError("MCP stdio args must be a list of strings.")
+
+    for arg in args:
+        if "\x00" in arg or "\r" in arg or "\n" in arg:
+            raise ValueError("MCP stdio args cannot contain control characters.")
+
+    if command_name.startswith("python") or command_name == "py":
+        if any(
+            arg == "-c"
+            or (arg.startswith("-") and not arg.startswith("--") and "c" in arg)
+            for arg in args
+        ):
+            raise ValueError(
+                "MCP stdio Python servers must be launched from a module or file; inline code flags such as -c are not allowed."
+            )
+    elif command_name in {"node", "deno", "bun"} or command_name.startswith("node"):
+        if any(
+            arg in _JS_INLINE_CODE_FLAGS
+            or arg == "eval"
+            or (
+                arg.startswith("-")
+                and not arg.startswith("--")
+                and any(c in arg for c in "ep")
+            )
+            for arg in args
+        ):
+            raise ValueError(
+                "MCP stdio JavaScript servers must be launched from a package or file; inline eval flags are not allowed."
+            )
+    elif command_name == "docker":
+        denied = []
+        for i, arg in enumerate(args):
+            if arg in _DENIED_DOCKER_ARGS:
+                denied.append(arg)
+            elif (
+                arg in {"--network", "--net", "--pid", "--ipc"}
+                and i + 1 < len(args)
+                and args[i + 1] == "host"
+            ):
+                denied.append(f"{arg} {args[i + 1]}")
+        if denied:
+            raise ValueError(
+                f"MCP stdio Docker args are unsafe and not allowed: {', '.join(denied)}."
+            )
+
+
+def validate_mcp_stdio_config(config: dict) -> None:
+    """Validate stdio MCP config before any subprocess can be spawned."""
+    cfg = _prepare_config(config.copy())
+    if "url" in cfg:
+        return
+
+    command = cfg.get("command")
+    if not isinstance(command, str) or not command.strip():
+        raise ValueError("MCP stdio server requires a non-empty command.")
+    if _SHELL_META_RE.search(command):
+        raise ValueError("MCP stdio command contains unsafe shell metacharacters.")
+
+    command_name = _normalize_stdio_command_name(command)
+    if command_name in _DENIED_STDIO_COMMANDS:
+        raise ValueError(f"MCP stdio command `{command_name}` is not allowed.")
+
+    allowed = _get_stdio_command_allowlist()
+    if command_name not in allowed:
+        allowed_display = ", ".join(sorted(allowed))
+        raise ValueError(
+            f"MCP stdio command `{command_name}` is not allowed. "
+            f"Allowed commands: {allowed_display}. "
+            f"Set {_STDIO_ALLOWLIST_ENV} to override this list if you trust another launcher."
+        )
+
+    _validate_stdio_args(command_name, cfg.get("args"))
+
+    env = cfg.get("env")
+    if env is not None and not isinstance(env, dict):
+        raise ValueError("MCP stdio env must be an object.")
+    if isinstance(env, dict) and not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in env.items()
+    ):
+        raise ValueError("MCP stdio env keys and values must be strings.")
+
+
+def _prepare_stdio_env(config: dict) -> dict:
+    """Preserve Windows executable resolution for stdio subprocesses."""
+    if sys.platform != "win32":
+        return config
+    prepared = config.copy()
+    env = dict(prepared.get("env") or {})
+    env = _merge_environment_variables(env)
+    prepared["env"] = env
+    return prepared
+
+
+def _merge_environment_variables(env: dict) -> dict:
+    """合并环境变量，处理Windows不区分大小写的情况"""
+    merged = env.copy()
+
+    # 将用户环境变量转换为统一的大小写形式便于比较
+    user_keys_lower = {k.lower(): k for k in merged.keys()}
+
+    for sys_key, sys_value in os.environ.items():
+        sys_key_lower = sys_key.lower()
+        if sys_key_lower not in user_keys_lower:
+            # 使用系统环境变量中的原始大小写
+            merged[sys_key] = sys_value
+
+    return merged
 
 
 async def _quick_test_mcp_connection(config: dict) -> tuple[bool, str]:
@@ -108,7 +326,7 @@ async def _quick_test_mcp_connection(config: dict) -> tuple[bool, str]:
 
 
 class MCPClient:
-    def __init__(self):
+    def __init__(self) -> None:
         # Initialize session and client objects
         self.session: mcp.ClientSession | None = None
         self.exit_stack = AsyncExitStack()
@@ -126,7 +344,7 @@ class MCPClient:
         self._reconnect_lock = asyncio.Lock()  # Lock for thread-safe reconnection
         self._reconnecting: bool = False  # For logging and debugging
 
-    async def connect_to_server(self, mcp_server_config: dict, name: str):
+    async def connect_to_server(self, mcp_server_config: dict, name: str) -> None:
         """Connect to MCP server
 
         If `url` parameter exists:
@@ -144,10 +362,14 @@ class MCPClient:
 
         cfg = _prepare_config(mcp_server_config.copy())
 
-        def logging_callback(msg: str):
+        def logging_callback(
+            msg: str | mcp.types.LoggingMessageNotificationParams,
+        ) -> None:
             # Handle MCP service error logs
-            print(f"MCP Server {name} Error: {msg}")
-            self.server_errlogs.append(msg)
+            if isinstance(msg, mcp.types.LoggingMessageNotificationParams):
+                if msg.level in ("warning", "error", "critical", "alert", "emergency"):
+                    log_msg = f"[{msg.level.upper()}] {str(msg.data)}"
+                    self.server_errlogs.append(log_msg)
 
         if "url" in cfg:
             success, error_msg = await _quick_test_mcp_connection(cfg)
@@ -210,19 +432,30 @@ class MCPClient:
                 )
 
         else:
+            validate_mcp_stdio_config(cfg)
+            cfg = _prepare_stdio_env(cfg)
             server_params = mcp.StdioServerParameters(
                 **cfg,
             )
 
-            def callback(msg: str):
+            def callback(msg: str | mcp.types.LoggingMessageNotificationParams) -> None:
                 # Handle MCP service error logs
-                self.server_errlogs.append(msg)
+                if isinstance(msg, mcp.types.LoggingMessageNotificationParams):
+                    if msg.level in (
+                        "warning",
+                        "error",
+                        "critical",
+                        "alert",
+                        "emergency",
+                    ):
+                        log_msg = f"[{msg.level.upper()}] {str(msg.data)}"
+                        self.server_errlogs.append(log_msg)
 
             stdio_transport = await self.exit_stack.enter_async_context(
                 mcp.stdio_client(
                     server_params,
                     errlog=LogPipe(
-                        level=logging.ERROR,
+                        level=logging.INFO,
                         logger=logger,
                         identifier=f"MCPServer-{name}",
                         callback=callback,
@@ -343,7 +576,7 @@ class MCPClient:
 
         return await _call_with_retry()
 
-    async def cleanup(self):
+    async def cleanup(self) -> None:
         """Clean up resources including old exit stacks from reconnections"""
         # Close current exit stack
         try:
@@ -365,7 +598,7 @@ class MCPTool(FunctionTool, Generic[TContext]):
 
     def __init__(
         self, mcp_tool: mcp.Tool, mcp_client: MCPClient, mcp_server_name: str, **kwargs
-    ):
+    ) -> None:
         super().__init__(
             name=mcp_tool.name,
             description=mcp_tool.description or "",

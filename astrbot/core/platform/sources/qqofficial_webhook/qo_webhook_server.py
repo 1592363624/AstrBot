@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import cast
 
 import quart
@@ -14,7 +15,9 @@ for handler in logging.root.handlers[:]:
 
 
 class QQOfficialWebhook:
-    def __init__(self, config: dict, event_queue: asyncio.Queue, botpy_client: Client):
+    def __init__(
+        self, config: dict, event_queue: asyncio.Queue, botpy_client: Client
+    ) -> None:
         self.appid = config["appid"]
         self.secret = config["secret"]
         self.port = config.get("port", 6196)
@@ -37,8 +40,11 @@ class QQOfficialWebhook:
         self.client = botpy_client
         self.event_queue = event_queue
         self.shutdown_event = asyncio.Event()
+        # Deduplication cache for webhook retry callbacks.
+        self._seen_event_ids: dict[str, float] = {}
+        self._dedup_ttl: int = 60  # seconds
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         logger.info("正在登录到 QQ 官方机器人...")
         self.user = await self.http.login(self.token)
         logger.info(f"已登录 QQ 官方机器人账号: {self.user}")
@@ -46,14 +52,14 @@ class QQOfficialWebhook:
         self.client.api = self.api
         self.client.http = self.http
 
-        async def bot_connect():
+        async def bot_connect() -> None:
             pass
 
         self._connection = ConnectionSession(
             max_async=1,
             connect=bot_connect,
             dispatch=self.client.ws_dispatch,
-            loop=asyncio.get_event_loop(),
+            loop=asyncio.get_running_loop(),
             api=self.api,
         )
 
@@ -104,6 +110,22 @@ class QQOfficialWebhook:
             print(signed)
             return signed
 
+        event_id = msg.get("id")
+        if event_id:
+            now = time.monotonic()
+            # Lazily evict expired entries to prevent unbounded growth.
+            expired = [
+                k
+                for k, ts in self._seen_event_ids.items()
+                if now - ts > self._dedup_ttl
+            ]
+            for k in expired:
+                del self._seen_event_ids[k]
+            if event_id in self._seen_event_ids:
+                logger.debug(f"Duplicate webhook event {event_id!r}, skipping.")
+                return {"opcode": 12}
+            self._seen_event_ids[event_id] = now
+
         if event and opcode == BotWebSocket.WS_DISPATCH_EVENT:
             event = msg["t"].lower()
             try:
@@ -115,7 +137,7 @@ class QQOfficialWebhook:
 
         return {"opcode": 12}
 
-    async def start_polling(self):
+    async def start_polling(self) -> None:
         logger.info(
             f"将在 {self.callback_server_host}:{self.port} 端口启动 QQ 官方机器人 webhook 适配器。",
         )
@@ -125,5 +147,5 @@ class QQOfficialWebhook:
             shutdown_trigger=self.shutdown_trigger,
         )
 
-    async def shutdown_trigger(self):
+    async def shutdown_trigger(self) -> None:
         await self.shutdown_event.wait()

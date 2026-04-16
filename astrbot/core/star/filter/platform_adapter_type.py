@@ -11,8 +11,8 @@ class PlatformAdapterType(enum.Flag):
     QQOFFICIAL = enum.auto()
     TELEGRAM = enum.auto()
     WECOM = enum.auto()
+    WECOM_AI_BOT = enum.auto()
     LARK = enum.auto()
-    WECHATPADPRO = enum.auto()
     DINGTALK = enum.auto()
     DISCORD = enum.auto()
     SLACK = enum.auto()
@@ -21,13 +21,15 @@ class PlatformAdapterType(enum.Flag):
     WEIXIN_OFFICIAL_ACCOUNT = enum.auto()
     SATORI = enum.auto()
     MISSKEY = enum.auto()
+    LINE = enum.auto()
+    MATRIX = enum.auto()
     ALL = (
         AIOCQHTTP
         | QQOFFICIAL
         | TELEGRAM
         | WECOM
+        | WECOM_AI_BOT
         | LARK
-        | WECHATPADPRO
         | DINGTALK
         | DISCORD
         | SLACK
@@ -36,6 +38,8 @@ class PlatformAdapterType(enum.Flag):
         | WEIXIN_OFFICIAL_ACCOUNT
         | SATORI
         | MISSKEY
+        | LINE
+        | MATRIX
     )
 
 
@@ -44,21 +48,23 @@ ADAPTER_NAME_2_TYPE = {
     "qq_official": PlatformAdapterType.QQOFFICIAL,
     "telegram": PlatformAdapterType.TELEGRAM,
     "wecom": PlatformAdapterType.WECOM,
+    "wecom_ai_bot": PlatformAdapterType.WECOM_AI_BOT,
     "lark": PlatformAdapterType.LARK,
     "dingtalk": PlatformAdapterType.DINGTALK,
     "discord": PlatformAdapterType.DISCORD,
     "slack": PlatformAdapterType.SLACK,
     "kook": PlatformAdapterType.KOOK,
-    "wechatpadpro": PlatformAdapterType.WECHATPADPRO,
     "vocechat": PlatformAdapterType.VOCECHAT,
     "weixin_official_account": PlatformAdapterType.WEIXIN_OFFICIAL_ACCOUNT,
     "satori": PlatformAdapterType.SATORI,
     "misskey": PlatformAdapterType.MISSKEY,
+    "line": PlatformAdapterType.LINE,
+    "matrix": PlatformAdapterType.MATRIX,
 }
 
 
 class PlatformAdapterTypeFilter(HandlerFilter):
-    def __init__(self, platform_adapter_type_or_str: PlatformAdapterType | str):
+    def __init__(self, platform_adapter_type_or_str: PlatformAdapterType | str) -> None:
         if isinstance(platform_adapter_type_or_str, str):
             self.platform_type = ADAPTER_NAME_2_TYPE.get(platform_adapter_type_or_str)
         else:

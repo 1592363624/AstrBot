@@ -5,7 +5,6 @@ import axios from 'axios';
 import { MarkdownRender, enableKatex, enableMermaid } from 'markstream-vue';
 import 'markstream-vue/index.css';
 import 'katex/dist/katex.min.css';
-import 'highlight.js/styles/github.css';
 
 enableKatex();
 enableMermaid();
@@ -151,7 +150,7 @@ getCurrentVersion();
           <v-icon>mdi-close</v-icon>
         </v-btn>
       </v-card-title>
-      <v-card-text>
+      <v-card-text class="pb-5">
         <!-- 版本选择器 -->
         <div class="mb-4">
           <v-select

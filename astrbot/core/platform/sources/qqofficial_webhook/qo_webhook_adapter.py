@@ -4,8 +4,6 @@ from typing import Any, cast
 
 import botpy
 import botpy.message
-import botpy.types
-import botpy.types.message
 from botpy import Client
 
 from astrbot import logger
@@ -26,52 +24,57 @@ for handler in logging.root.handlers[:]:
 
 # QQ 机器人官方框架
 class botClient(Client):
-    def set_platform(self, platform: "QQOfficialWebhookPlatformAdapter"):
+    def set_platform(self, platform: "QQOfficialWebhookPlatformAdapter") -> None:
         self.platform = platform
 
     # 收到群消息
-    async def on_group_at_message_create(self, message: botpy.message.GroupMessage):
-        abm = QQOfficialPlatformAdapter._parse_from_qqofficial(
+    async def on_group_at_message_create(
+        self, message: botpy.message.GroupMessage
+    ) -> None:
+        abm = await QQOfficialPlatformAdapter._parse_from_qqofficial(
             message,
             MessageType.GROUP_MESSAGE,
         )
-        abm.session_id = (
-            abm.sender.user_id
-            if self.platform.unique_session
-            else cast(str, message.group_openid)
-        )
+        abm.group_id = cast(str, message.group_openid)
+        abm.session_id = abm.group_id
+        self.platform.remember_session_scene(abm.session_id, "group")
         self._commit(abm)
 
     # 收到频道消息
-    async def on_at_message_create(self, message: botpy.message.Message):
-        abm = QQOfficialPlatformAdapter._parse_from_qqofficial(
+    async def on_at_message_create(self, message: botpy.message.Message) -> None:
+        abm = await QQOfficialPlatformAdapter._parse_from_qqofficial(
             message,
             MessageType.GROUP_MESSAGE,
         )
-        abm.session_id = (
-            abm.sender.user_id if self.platform.unique_session else message.channel_id
-        )
+        abm.group_id = message.channel_id
+        abm.session_id = abm.group_id
+        self.platform.remember_session_scene(abm.session_id, "channel")
         self._commit(abm)
 
     # 收到私聊消息
-    async def on_direct_message_create(self, message: botpy.message.DirectMessage):
-        abm = QQOfficialPlatformAdapter._parse_from_qqofficial(
+    async def on_direct_message_create(
+        self, message: botpy.message.DirectMessage
+    ) -> None:
+        abm = await QQOfficialPlatformAdapter._parse_from_qqofficial(
             message,
             MessageType.FRIEND_MESSAGE,
         )
         abm.session_id = abm.sender.user_id
+        self.platform.remember_session_scene(abm.session_id, "friend")
         self._commit(abm)
 
     # 收到 C2C 消息
-    async def on_c2c_message_create(self, message: botpy.message.C2CMessage):
-        abm = QQOfficialPlatformAdapter._parse_from_qqofficial(
+    async def on_c2c_message_create(self, message: botpy.message.C2CMessage) -> None:
+        abm = await QQOfficialPlatformAdapter._parse_from_qqofficial(
             message,
             MessageType.FRIEND_MESSAGE,
         )
         abm.session_id = abm.sender.user_id
+        self.platform.remember_session_scene(abm.session_id, "friend")
         self._commit(abm)
 
-    def _commit(self, abm: AstrBotMessage):
+    def _commit(self, abm: AstrBotMessage) -> None:
+        self.platform.remember_session_message_id(abm.session_id, abm.message_id)
         self.platform.commit_event(
             QQOfficialWebhookMessageEvent(
                 abm.message_str,
@@ -95,7 +98,6 @@ class QQOfficialWebhookPlatformAdapter(Platform):
 
         self.appid = platform_config["appid"]
         self.secret = platform_config["secret"]
-        self.unique_session = platform_settings["unique_session"]
         self.unified_webhook_mode = platform_config.get("unified_webhook_mode", False)
 
         intents = botpy.Intents(
@@ -110,22 +112,48 @@ class QQOfficialWebhookPlatformAdapter(Platform):
         )
         self.client.set_platform(self)
         self.webhook_helper = None
+        self._session_last_message_id: dict[str, str] = {}
+        self._session_scene: dict[str, str] = {}
 
     async def send_by_session(
         self,
         session: MessageSesion,
         message_chain: MessageChain,
-    ):
-        raise NotImplementedError("QQ 机器人官方 API 适配器不支持 send_by_session")
+    ) -> None:
+        await QQOfficialPlatformAdapter._send_by_session_common(
+            cast(Any, self),
+            session,
+            message_chain,
+        )
+
+    def remember_session_message_id(self, session_id: str, message_id: str) -> None:
+        if not session_id or not message_id:
+            return
+        self._session_last_message_id[session_id] = message_id
+
+    def remember_session_scene(self, session_id: str, scene: str) -> None:
+        if not session_id or not scene:
+            return
+        self._session_scene[session_id] = scene
+
+    def _extract_message_id(self, ret: Any) -> str | None:
+        if isinstance(ret, dict):
+            message_id = ret.get("id")
+            return str(message_id) if message_id else None
+        message_id = getattr(ret, "id", None)
+        if message_id:
+            return str(message_id)
+        return None
 
     def meta(self) -> PlatformMetadata:
         return PlatformMetadata(
             name="qq_official_webhook",
             description="QQ 机器人官方 API 适配器",
             id=cast(str, self.config.get("id")),
+            support_proactive_message=True,
         )
 
-    async def run(self):
+    async def run(self) -> None:
         self.webhook_helper = QQOfficialWebhook(
             self.config,
             self._event_queue,
@@ -153,7 +181,7 @@ class QQOfficialWebhookPlatformAdapter(Platform):
         # 复用 webhook_helper 的回调处理逻辑
         return await self.webhook_helper.handle_callback(request)
 
-    async def terminate(self):
+    async def terminate(self) -> None:
         if self.webhook_helper:
             self.webhook_helper.shutdown_event.set()
         await self.client.close()
@@ -165,4 +193,4 @@ class QQOfficialWebhookPlatformAdapter(Platform):
                     f"Exception occurred during QQOfficialWebhook server shutdown: {exc}",
                     exc_info=True,
                 )
-        logger.info("QQ 机器人官方 API 适配器已经被优雅地关闭")
+        logger.info("QQ 机器人官方 API 适配器已经被关闭")

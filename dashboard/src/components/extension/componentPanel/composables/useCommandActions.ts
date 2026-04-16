@@ -14,6 +14,7 @@ export function useCommandActions(
     show: false,
     command: null,
     newName: '',
+    aliases: [],
     loading: false
   });
 
@@ -27,8 +28,8 @@ export function useCommandActions(
    * 切换指令启用/禁用状态
    */
   const toggleCommand = async (
-    cmd: CommandItem, 
-    successMessage: string, 
+    cmd: CommandItem,
+    successMessage: string,
     errorMessage: string
   ) => {
     try {
@@ -53,6 +54,7 @@ export function useCommandActions(
   const openRenameDialog = (cmd: CommandItem) => {
     renameDialog.command = cmd;
     renameDialog.newName = cmd.current_fragment || '';
+    renameDialog.aliases = [...(cmd.aliases || [])];
     renameDialog.show = true;
   };
 
@@ -66,7 +68,8 @@ export function useCommandActions(
     try {
       const res = await axios.post('/api/commands/rename', {
         handler_full_name: renameDialog.command.handler_full_name,
-        new_name: renameDialog.newName.trim()
+        new_name: renameDialog.newName.trim(),
+        aliases: renameDialog.aliases.filter(a => a.trim())
       });
       if (res.data.status === 'ok') {
         toast(successMessage, 'success');
@@ -128,7 +131,7 @@ export function useCommandActions(
    * 获取状态显示信息
    */
   const getStatusInfo = (
-    cmd: CommandItem, 
+    cmd: CommandItem,
     translations: { conflict: string; enabled: string; disabled: string }
   ): StatusInfo => {
     if (cmd.has_conflict) {
@@ -157,13 +160,39 @@ export function useCommandActions(
     return classes.length > 0 ? { class: classes.join(' ') } : {};
   };
 
+  /**
+   * 更新指令权限
+   */
+  const updatePermission = async (
+    cmd: CommandItem,
+    permission: 'admin' | 'member',
+    successMessage: string,
+    errorMessage: string
+  ) => {
+    try {
+      const res = await axios.post('/api/commands/permission', {
+        handler_full_name: cmd.handler_full_name,
+        permission: permission
+      });
+      if (res.data.status === 'ok') {
+        toast(successMessage, 'success');
+        await fetchCommands();
+      } else {
+        toast(res.data.message || errorMessage, 'error');
+      }
+    } catch (err: any) {
+      toast(err?.message || errorMessage, 'error');
+    }
+  };
+
   return {
     // 状态
     renameDialog,
     detailsDialog,
-    
+
     // 方法
     toggleCommand,
+    updatePermission,
     openRenameDialog,
     confirmRename,
     openDetailsDialog,

@@ -1,9 +1,10 @@
 import base64
 import json
 from collections.abc import AsyncGenerator
-from mimetypes import guess_type
+from typing import Literal
 
 import anthropic
+import httpx
 from anthropic import AsyncAnthropic
 from anthropic.types import Message
 from anthropic.types.message_delta_usage import MessageDeltaUsage
@@ -11,9 +12,15 @@ from anthropic.types.usage import Usage
 
 from astrbot import logger
 from astrbot.api.provider import Provider
+from astrbot.core.agent.message import AudioURLPart, ContentPart, ImageURLPart, TextPart
+from astrbot.core.exceptions import EmptyModelOutputError
 from astrbot.core.provider.entities import LLMResponse, TokenUsage
 from astrbot.core.provider.func_tool_manager import ToolSet
 from astrbot.core.utils.io import download_image_by_url
+from astrbot.core.utils.network_utils import (
+    is_connection_error,
+    log_connection_failure,
+)
 
 from ..register import register_provider_adapter
 
@@ -23,31 +30,107 @@ from ..register import register_provider_adapter
     "Anthropic Claude API 提供商适配器",
 )
 class ProviderAnthropic(Provider):
+    @staticmethod
+    def _ensure_usable_response(
+        llm_response: LLMResponse,
+        *,
+        completion_id: str | None = None,
+        stop_reason: str | None = None,
+    ) -> None:
+        has_text_output = bool((llm_response.completion_text or "").strip())
+        has_reasoning_output = bool(llm_response.reasoning_content.strip())
+        has_tool_output = bool(llm_response.tools_call_args)
+        if has_text_output or has_reasoning_output or has_tool_output:
+            return
+        raise EmptyModelOutputError(
+            "Anthropic completion has no usable output. "
+            f"completion_id={completion_id}, stop_reason={stop_reason}"
+        )
+
+    @staticmethod
+    def _normalize_custom_headers(provider_config: dict) -> dict[str, str] | None:
+        custom_headers = provider_config.get("custom_headers", {})
+        if not isinstance(custom_headers, dict) or not custom_headers:
+            return None
+        normalized_headers: dict[str, str] = {}
+        for key, value in custom_headers.items():
+            normalized_headers[str(key)] = str(value)
+        return normalized_headers or None
+
+    @classmethod
+    def _resolve_custom_headers(
+        cls,
+        provider_config: dict,
+        *,
+        required_headers: dict[str, str] | None = None,
+    ) -> dict[str, str] | None:
+        merged_headers = cls._normalize_custom_headers(provider_config) or {}
+        if required_headers:
+            for header_name, header_value in required_headers.items():
+                if not merged_headers.get(header_name, "").strip():
+                    merged_headers[header_name] = header_value
+        return merged_headers or None
+
     def __init__(
         self,
         provider_config,
         provider_settings,
+        *,
+        use_api_key: bool = True,
     ) -> None:
         super().__init__(
             provider_config,
             provider_settings,
         )
 
-        self.chosen_api_key: str = ""
-        self.api_keys: list = super().get_keys()
-        self.chosen_api_key = self.api_keys[0] if len(self.api_keys) > 0 else ""
         self.base_url = provider_config.get("api_base", "https://api.anthropic.com")
         self.timeout = provider_config.get("timeout", 120)
         if isinstance(self.timeout, str):
             self.timeout = int(self.timeout)
+        self.thinking_config = provider_config.get("anth_thinking_config", {})
+        self.custom_headers = self._resolve_custom_headers(provider_config)
 
+        if use_api_key:
+            self._init_api_key(provider_config)
+
+        self.set_model(provider_config.get("model", "unknown"))
+
+    def _init_api_key(self, provider_config: dict) -> None:
+        self.chosen_api_key: str = ""
+        self.api_keys: list = super().get_keys()
+        self.chosen_api_key = self.api_keys[0] if len(self.api_keys) > 0 else ""
         self.client = AsyncAnthropic(
             api_key=self.chosen_api_key,
             timeout=self.timeout,
             base_url=self.base_url,
+            http_client=self._create_http_client(provider_config),
         )
 
-        self.set_model(provider_config.get("model", "unknown"))
+    def _create_http_client(self, provider_config: dict) -> httpx.AsyncClient | None:
+        """创建带代理的 HTTP 客户端"""
+        proxy = provider_config.get("proxy", "")
+        if proxy:
+            logger.info(f"[Anthropic] 使用代理: {proxy}")
+            return httpx.AsyncClient(proxy=proxy, headers=self.custom_headers)
+        if self.custom_headers:
+            return httpx.AsyncClient(headers=self.custom_headers)
+        return None
+
+    def _apply_thinking_config(self, payloads: dict) -> None:
+        thinking_type = self.thinking_config.get("type", "")
+        if thinking_type == "adaptive":
+            payloads["thinking"] = {"type": "adaptive"}
+            effort = self.thinking_config.get("effort", "")
+            output_cfg = dict(payloads.get("output_config", {}))
+            if effort:
+                output_cfg["effort"] = effort
+            if output_cfg:
+                payloads["output_config"] = output_cfg
+        elif not thinking_type and self.thinking_config.get("budget"):
+            payloads["thinking"] = {
+                "budget_tokens": self.thinking_config.get("budget"),
+                "type": "enabled",
+            }
 
     def _prepare_payload(self, messages: list[dict]):
         """准备 Anthropic API 的请求 payload
@@ -63,12 +146,33 @@ class ProviderAnthropic(Provider):
         new_messages = []
         for message in messages:
             if message["role"] == "system":
-                system_prompt = message["content"]
+                system_prompt = message["content"] or "<empty system prompt>"
             elif message["role"] == "assistant":
                 blocks = []
-                if isinstance(message["content"], str):
+                reasoning_content = ""
+                thinking_signature = ""
+                if isinstance(message["content"], str) and message["content"].strip():
                     blocks.append({"type": "text", "text": message["content"]})
-                if "tool_calls" in message:
+                elif isinstance(message["content"], list):
+                    for part in message["content"]:
+                        if part.get("type") == "think":
+                            # only pick the last think part for now
+                            reasoning_content = part.get("think")
+                            thinking_signature = part.get("encrypted")
+                        else:
+                            blocks.append(part)
+
+                if reasoning_content and thinking_signature:
+                    blocks.insert(
+                        0,
+                        {
+                            "type": "thinking",
+                            "thinking": reasoning_content,
+                            "signature": thinking_signature,
+                        },
+                    )
+
+                if "tool_calls" in message and isinstance(message["tool_calls"], list):
                     for tool_call in message["tool_calls"]:
                         blocks.append(  # noqa: PERF401
                             {
@@ -99,11 +203,62 @@ class ProviderAnthropic(Provider):
                             {
                                 "type": "tool_result",
                                 "tool_use_id": message["tool_call_id"],
-                                "content": message["content"],
+                                "content": message["content"] or "<empty response>",
                             },
                         ],
                     },
                 )
+            elif message["role"] == "user":
+                if isinstance(message.get("content"), list):
+                    converted_content = []
+                    for part in message["content"]:
+                        if part.get("type") == "image_url":
+                            # Convert OpenAI image_url format to Anthropic image format
+                            image_url_data = part.get("image_url", {})
+                            url = image_url_data.get("url", "")
+                            if url.startswith("data:"):
+                                try:
+                                    _, base64_data = url.split(",", 1)
+                                    # Detect actual image format from binary data
+                                    image_bytes = base64.b64decode(base64_data)
+                                    media_type = self._detect_image_mime_type(
+                                        image_bytes
+                                    )
+                                    converted_content.append(
+                                        {
+                                            "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": media_type,
+                                                "data": base64_data,
+                                            },
+                                        }
+                                    )
+                                except ValueError:
+                                    logger.warning(
+                                        f"Failed to parse image data URI: {url[:50]}..."
+                                    )
+                            else:
+                                logger.warning(
+                                    f"Unsupported image URL format for Anthropic: {url[:50]}..."
+                                )
+                        elif part.get("type") == "audio_url":
+                            converted_content.append(
+                                {
+                                    "type": "text",
+                                    "text": "[Audio Attachment]",
+                                }
+                            )
+                        else:
+                            converted_content.append(part)
+                    new_messages.append(
+                        {
+                            "role": "user",
+                            "content": converted_content,
+                        }
+                    )
+                else:
+                    new_messages.append(message)
             else:
                 new_messages.append(message)
 
@@ -129,18 +284,39 @@ class ProviderAnthropic(Provider):
         if tools:
             if tool_list := tools.get_func_desc_anthropic_style():
                 payloads["tools"] = tool_list
+                payloads["tool_choice"] = {
+                    "type": "any"
+                    if payloads.get("tool_choice") == "required"
+                    else "auto"
+                }
 
         extra_body = self.provider_config.get("custom_extra_body", {})
 
-        completion = await self.client.messages.create(
-            **payloads, stream=False, extra_body=extra_body
-        )
+        if "max_tokens" not in payloads:
+            payloads["max_tokens"] = 1024
+        self._apply_thinking_config(payloads)
+
+        try:
+            completion = await self.client.messages.create(
+                **payloads, stream=False, extra_body=extra_body
+            )
+        except httpx.RequestError as e:
+            proxy = self.provider_config.get("proxy", "")
+            log_connection_failure("Anthropic", e, proxy)
+            raise
+        except Exception as e:
+            if is_connection_error(e):
+                proxy = self.provider_config.get("proxy", "")
+                log_connection_failure("Anthropic", e, proxy)
+            raise
 
         assert isinstance(completion, Message)
         logger.debug(f"completion: {completion}")
 
         if len(completion.content) == 0:
-            raise Exception("API 返回的 completion 为空。")
+            raise EmptyModelOutputError(
+                f"Anthropic completion is empty. completion_id={completion.id}"
+            )
 
         llm_response = LLMResponse(role="assistant")
 
@@ -148,6 +324,11 @@ class ProviderAnthropic(Provider):
             if content_block.type == "text":
                 completion_text = str(content_block.text).strip()
                 llm_response.completion_text = completion_text
+
+            if content_block.type == "thinking":
+                reasoning_content = str(content_block.thinking).strip()
+                llm_response.reasoning_content = reasoning_content
+                llm_response.reasoning_signature = content_block.signature
 
             if content_block.type == "tool_use":
                 llm_response.tools_call_args.append(content_block.input)
@@ -157,10 +338,29 @@ class ProviderAnthropic(Provider):
         llm_response.id = completion.id
         llm_response.usage = self._extract_usage(completion.usage)
 
-        # TODO(Soulter): 处理 end_turn 情况
+        # Handle cases where completion only contains ThinkingBlock (e.g., MiniMax max_tokens)
+        # When stop_reason='max_tokens', the model may return only thinking content
+        # This is valid and should not raise an exception
         if not llm_response.completion_text and not llm_response.tools_call_args:
-            raise Exception(f"Anthropic API 返回的 completion 无法解析：{completion}。")
+            # Guard clause: raise early if no valid content at all
+            if not llm_response.reasoning_content:
+                raise EmptyModelOutputError(
+                    "Anthropic completion has no usable output. "
+                    f"completion_id={completion.id}, stop_reason={completion.stop_reason}"
+                )
 
+            # We have reasoning content (ThinkingBlock) - this is valid
+            stop_reason = getattr(completion, "stop_reason", "unknown")
+            logger.debug(
+                f"Completion contains only ThinkingBlock (stop_reason={stop_reason})"
+            )
+            llm_response.completion_text = ""  # Ensure empty string, not None
+
+        self._ensure_usable_response(
+            llm_response,
+            completion_id=completion.id,
+            stop_reason=completion.stop_reason,
+        )
         return llm_response
 
     async def _query_stream(
@@ -171,6 +371,11 @@ class ProviderAnthropic(Provider):
         if tools:
             if tool_list := tools.get_func_desc_anthropic_style():
                 payloads["tools"] = tool_list
+                payloads["tool_choice"] = {
+                    "type": "any"
+                    if payloads.get("tool_choice") == "required"
+                    else "auto"
+                }
 
         # 用于累积工具调用信息
         tool_use_buffer = {}
@@ -180,6 +385,12 @@ class ProviderAnthropic(Provider):
         id = None
         usage = TokenUsage()
         extra_body = self.provider_config.get("custom_extra_body", {})
+        reasoning_content = ""
+        reasoning_signature = ""
+
+        if "max_tokens" not in payloads:
+            payloads["max_tokens"] = 1024
+        self._apply_thinking_config(payloads)
 
         async with self.client.messages.stream(
             **payloads, extra_body=extra_body
@@ -219,6 +430,21 @@ class ProviderAnthropic(Provider):
                             usage=usage,
                             id=id,
                         )
+                    elif event.delta.type == "thinking_delta":
+                        # 思考增量
+                        reasoning = event.delta.thinking
+                        if reasoning:
+                            yield LLMResponse(
+                                role="assistant",
+                                reasoning_content=reasoning,
+                                is_chunk=True,
+                                usage=usage,
+                                id=id,
+                                reasoning_signature=reasoning_signature or None,
+                            )
+                            reasoning_content += reasoning
+                    elif event.delta.type == "signature_delta":
+                        reasoning_signature = event.delta.signature
                     elif event.delta.type == "input_json_delta":
                         # 工具调用参数增量
                         if event.index in tool_use_buffer:
@@ -275,6 +501,8 @@ class ProviderAnthropic(Provider):
             is_chunk=False,
             usage=usage,
             id=id,
+            reasoning_content=reasoning_content,
+            reasoning_signature=reasoning_signature or None,
         )
 
         if final_tool_calls:
@@ -284,6 +512,11 @@ class ProviderAnthropic(Provider):
             final_response.tools_call_name = [call["name"] for call in final_tool_calls]
             final_response.tools_call_ids = [call["id"] for call in final_tool_calls]
 
+        self._ensure_usable_response(
+            final_response,
+            completion_id=id,
+            stop_reason=None,
+        )
         yield final_response
 
     async def text_chat(
@@ -291,18 +524,26 @@ class ProviderAnthropic(Provider):
         prompt=None,
         session_id=None,
         image_urls=None,
+        audio_urls=None,
         func_tool=None,
         contexts=None,
         system_prompt=None,
         tool_calls_result=None,
         model=None,
+        extra_user_content_parts=None,
+        tool_choice: Literal["auto", "required"] = "auto",
         **kwargs,
     ) -> LLMResponse:
         if contexts is None:
             contexts = []
         new_record = None
         if prompt is not None:
-            new_record = await self.assemble_context(prompt, image_urls)
+            new_record = await self.assemble_context(
+                prompt or "",
+                image_urls,
+                audio_urls,
+                extra_user_content_parts,
+            )
         context_query = self._ensure_message_to_dicts(contexts)
         if new_record:
             context_query.append(new_record)
@@ -327,6 +568,8 @@ class ProviderAnthropic(Provider):
         model = model or self.get_model()
 
         payloads = {"messages": new_messages, "model": model}
+        if func_tool and not func_tool.empty():
+            payloads["tool_choice"] = tool_choice
 
         # Anthropic has a different way of handling system prompts
         if system_prompt:
@@ -342,21 +585,29 @@ class ProviderAnthropic(Provider):
 
     async def text_chat_stream(
         self,
-        prompt,
+        prompt=None,
         session_id=None,
-        image_urls=...,
+        image_urls=None,
+        audio_urls=None,
         func_tool=None,
-        contexts=...,
+        contexts=None,
         system_prompt=None,
         tool_calls_result=None,
         model=None,
+        extra_user_content_parts=None,
+        tool_choice: Literal["auto", "required"] = "auto",
         **kwargs,
     ):
         if contexts is None:
             contexts = []
         new_record = None
         if prompt is not None:
-            new_record = await self.assemble_context(prompt, image_urls)
+            new_record = await self.assemble_context(
+                prompt or "",
+                image_urls,
+                audio_urls,
+                extra_user_content_parts,
+            )
         context_query = self._ensure_message_to_dicts(contexts)
         if new_record:
             context_query.append(new_record)
@@ -380,6 +631,8 @@ class ProviderAnthropic(Provider):
         model = model or self.get_model()
 
         payloads = {"messages": new_messages, "model": model}
+        if func_tool and not func_tool.empty():
+            payloads["tool_choice"] = tool_choice
 
         # Anthropic has a different way of handling system prompts
         if system_prompt:
@@ -388,58 +641,122 @@ class ProviderAnthropic(Provider):
         async for llm_response in self._query_stream(payloads, func_tool):
             yield llm_response
 
-    async def assemble_context(self, text: str, image_urls: list[str] | None = None):
+    def _detect_image_mime_type(self, data: bytes) -> str:
+        """根据图片二进制数据的 magic bytes 检测 MIME 类型"""
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return "image/png"
+        if data[:2] == b"\xff\xd8":
+            return "image/jpeg"
+        if data[:6] in (b"GIF87a", b"GIF89a"):
+            return "image/gif"
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return "image/webp"
+        return "image/jpeg"
+
+    async def assemble_context(
+        self,
+        text: str,
+        image_urls: list[str] | None = None,
+        audio_urls: list[str] | None = None,
+        extra_user_content_parts: list[ContentPart] | None = None,
+    ):
         """组装上下文，支持文本和图片"""
-        if not image_urls:
-            return {"role": "user", "content": text}
 
-        content = []
-        content.append({"type": "text", "text": text})
-
-        for image_url in image_urls:
+        async def resolve_image_url(image_url: str) -> dict | None:
             if image_url.startswith("http"):
                 image_path = await download_image_by_url(image_url)
-                image_data = await self.encode_image_bs64(image_path)
+                image_data, mime_type = await self.encode_image_bs64(image_path)
             elif image_url.startswith("file:///"):
                 image_path = image_url.replace("file:///", "")
-                image_data = await self.encode_image_bs64(image_path)
+                image_data, mime_type = await self.encode_image_bs64(image_path)
             else:
-                image_data = await self.encode_image_bs64(image_url)
+                image_data, mime_type = await self.encode_image_bs64(image_url)
 
             if not image_data:
                 logger.warning(f"图片 {image_url} 得到的结果为空，将忽略。")
-                continue
+                return None
 
-            # Get mime type for the image
-            mime_type, _ = guess_type(image_url)
-            if not mime_type:
-                mime_type = "image/jpeg"  # Default to JPEG if can't determine
-
-            content.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": mime_type,
-                        "data": (
-                            image_data.split("base64,")[1]
-                            if "base64," in image_data
-                            else image_data
-                        ),
-                    },
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime_type,
+                    "data": (
+                        image_data.split("base64,")[1]
+                        if "base64," in image_data
+                        else image_data
+                    ),
                 },
-            )
+            }
 
+        content = []
+
+        # 1. 用户原始发言（OpenAI 建议：用户发言在前）
+        if text:
+            content.append({"type": "text", "text": text})
+        elif image_urls:
+            # 如果没有文本但有图片，添加占位文本
+            content.append({"type": "text", "text": "[Image]"})
+        elif audio_urls:
+            content.append({"type": "text", "text": "[Audio]"})
+        elif extra_user_content_parts:
+            # 如果只有额外内容块，也需要添加占位文本
+            content.append({"type": "text", "text": " "})
+
+        # 2. 额外的内容块（系统提醒、指令等）
+        if extra_user_content_parts:
+            for block in extra_user_content_parts:
+                if isinstance(block, TextPart):
+                    content.append({"type": "text", "text": block.text})
+                elif isinstance(block, ImageURLPart):
+                    image_dict = await resolve_image_url(block.image_url.url)
+                    if image_dict:
+                        content.append(image_dict)
+                elif isinstance(block, AudioURLPart):
+                    content.append({"type": "text", "text": "[Audio]"})
+                else:
+                    raise ValueError(f"不支持的额外内容块类型: {type(block)}")
+
+        # 3. 图片内容
+        if image_urls:
+            for image_url in image_urls:
+                image_dict = await resolve_image_url(image_url)
+                if image_dict:
+                    content.append(image_dict)
+        if audio_urls:
+            for _audio_path in audio_urls:
+                content.append({"type": "text", "text": "[Audio]"})
+
+        # 如果只有主文本且没有额外内容块和图片，返回简单格式以保持向后兼容
+        if (
+            text
+            and not extra_user_content_parts
+            and not image_urls
+            and not audio_urls
+            and len(content) == 1
+            and content[0]["type"] == "text"
+        ):
+            return {"role": "user", "content": content[0]["text"]}
+
+        # 否则返回多模态格式
         return {"role": "user", "content": content}
 
-    async def encode_image_bs64(self, image_url: str) -> str:
-        """将图片转换为 base64"""
+    async def encode_image_bs64(self, image_url: str) -> tuple[str, str]:
+        """将图片转换为 base64，同时检测实际 MIME 类型"""
         if image_url.startswith("base64://"):
-            return image_url.replace("base64://", "data:image/jpeg;base64,")
+            raw_base64 = image_url.replace("base64://", "")
+            try:
+                image_bytes = base64.b64decode(raw_base64)
+                mime_type = self._detect_image_mime_type(image_bytes)
+            except Exception:
+                mime_type = "image/jpeg"
+            return f"data:{mime_type};base64,{raw_base64}", mime_type
         with open(image_url, "rb") as f:
-            image_bs64 = base64.b64encode(f.read()).decode("utf-8")
-            return "data:image/jpeg;base64," + image_bs64
-        return ""
+            image_bytes = f.read()
+            mime_type = self._detect_image_mime_type(image_bytes)
+            image_bs64 = base64.b64encode(image_bytes).decode("utf-8")
+            return f"data:{mime_type};base64,{image_bs64}", mime_type
+        return "", "image/jpeg"
 
     def get_current_key(self) -> str:
         return self.chosen_api_key
@@ -452,5 +769,9 @@ class ProviderAnthropic(Provider):
             models_str.append(model.id)
         return models_str
 
-    def set_key(self, key: str):
+    def set_key(self, key: str) -> None:
         self.chosen_api_key = key
+
+    async def terminate(self):
+        if self.client:
+            await self.client.close()

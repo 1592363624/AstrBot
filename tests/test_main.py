@@ -16,6 +16,31 @@ class _version_info:
         self.major = major
         self.minor = minor
 
+    def __eq__(self, other):
+        if isinstance(other, tuple):
+            return (self.major, self.minor) == other[:2]
+        return (self.major, self.minor) == (other.major, other.minor)
+
+    def __ge__(self, other):
+        if isinstance(other, tuple):
+            return (self.major, self.minor) >= other[:2]
+        return (self.major, self.minor) >= (other.major, other.minor)
+
+    def __le__(self, other):
+        if isinstance(other, tuple):
+            return (self.major, self.minor) <= other[:2]
+        return (self.major, self.minor) <= (other.major, other.minor)
+
+    def __gt__(self, other):
+        if isinstance(other, tuple):
+            return (self.major, self.minor) > other[:2]
+        return (self.major, self.minor) > (other.major, other.minor)
+
+    def __lt__(self, other):
+        if isinstance(other, tuple):
+            return (self.major, self.minor) < other[:2]
+        return (self.major, self.minor) < (other.major, other.minor)
+
 
 def test_check_env(monkeypatch):
     version_info_correct = _version_info(3, 10)
@@ -23,13 +48,91 @@ def test_check_env(monkeypatch):
     monkeypatch.setattr(sys, "version_info", version_info_correct)
     with mock.patch("os.makedirs") as mock_makedirs:
         check_env()
-        mock_makedirs.assert_any_call("data/config", exist_ok=True)
-        mock_makedirs.assert_any_call("data/plugins", exist_ok=True)
-        mock_makedirs.assert_any_call("data/temp", exist_ok=True)
+        # check_env uses get_astrbot_*_path() which returns absolute paths,
+        # so just verify makedirs was called the expected number of times
+        assert mock_makedirs.call_count >= 4
+        # Verify all calls used exist_ok=True
+        for call_args in mock_makedirs.call_args_list:
+            assert call_args[1].get("exist_ok") is True
 
     monkeypatch.setattr(sys, "version_info", version_info_wrong)
     with pytest.raises(SystemExit):
         check_env()
+
+
+def test_check_env_appends_user_site_packages_after_runtime_paths(monkeypatch):
+    astrbot_root = "/tmp/astrbot-root"
+    site_packages_path = "/tmp/astrbot-site-packages"
+    original_sys_path = list(sys.path)
+
+    monkeypatch.setattr(sys, "version_info", _version_info(3, 12))
+    monkeypatch.setattr("main.get_astrbot_root", lambda: astrbot_root)
+    monkeypatch.setattr("main.get_astrbot_site_packages_path", lambda: site_packages_path)
+    monkeypatch.setattr("main.get_astrbot_config_path", lambda: "/tmp/config")
+    monkeypatch.setattr("main.get_astrbot_plugin_path", lambda: "/tmp/plugins")
+    monkeypatch.setattr("main.get_astrbot_temp_path", lambda: "/tmp/temp")
+    monkeypatch.setattr("main.get_astrbot_knowledge_base_path", lambda: "/tmp/kb")
+    monkeypatch.setattr(sys, "path", ["/runtime/lib", *original_sys_path])
+
+    with mock.patch("os.makedirs"):
+        check_env()
+
+    assert sys.path[0] == astrbot_root
+    assert sys.path[-1] == site_packages_path
+    assert sys.path.index(site_packages_path) > sys.path.index("/runtime/lib")
+
+
+def test_check_env_does_not_append_duplicate_user_site_packages(monkeypatch):
+    astrbot_root = "/tmp/astrbot-root"
+    site_packages_path = "/tmp/astrbot-site-packages"
+    original_sys_path = list(sys.path)
+
+    monkeypatch.setattr(sys, "version_info", _version_info(3, 12))
+    monkeypatch.setattr("main.get_astrbot_root", lambda: astrbot_root)
+    monkeypatch.setattr("main.get_astrbot_site_packages_path", lambda: site_packages_path)
+    monkeypatch.setattr("main.get_astrbot_config_path", lambda: "/tmp/config")
+    monkeypatch.setattr("main.get_astrbot_plugin_path", lambda: "/tmp/plugins")
+    monkeypatch.setattr("main.get_astrbot_temp_path", lambda: "/tmp/temp")
+    monkeypatch.setattr("main.get_astrbot_knowledge_base_path", lambda: "/tmp/kb")
+    monkeypatch.setattr(sys, "path", [astrbot_root, *original_sys_path, site_packages_path])
+
+    with mock.patch("os.makedirs"):
+        check_env()
+
+    assert sys.path.count(site_packages_path) == 1
+
+
+def test_version_info_comparisons():
+    """Test _version_info comparison operators with tuples and other instances."""
+    v3_10 = _version_info(3, 10)
+    v3_9 = _version_info(3, 9)
+    v3_11 = _version_info(3, 11)
+
+    # Test __eq__ with tuples
+    assert v3_10 == (3, 10)
+    assert v3_10 != (3, 9)
+    assert v3_9 == (3, 9)
+
+    # Test __ge__ with tuples
+    assert v3_10 >= (3, 10)
+    assert v3_10 >= (3, 9)
+    assert not (v3_9 >= (3, 10))
+    assert v3_11 >= (3, 10)
+
+    # Test __eq__ with other _version_info instances
+    assert v3_10 == _version_info(3, 10)
+    assert v3_10 != v3_9
+    assert v3_10 == v3_10  # Same instance
+
+    assert v3_10 != v3_11
+
+    # Test __ge__ with other _version_info instances
+    assert v3_10 >= v3_10
+    assert v3_10 >= v3_9
+    assert not (v3_9 >= v3_10)
+    assert v3_11 >= v3_10
+
+    assert v3_11 >= v3_11  # Same instance
 
 
 @pytest.mark.asyncio

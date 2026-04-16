@@ -9,6 +9,7 @@ from astrbot.core.message.components import (
     AtAll,
     BaseMessageComponent,
     Image,
+    Json,
     Plain,
 )
 
@@ -117,9 +118,26 @@ class MessageChain:
         self.use_t2i_ = use_t2i
         return self
 
-    def get_plain_text(self) -> str:
-        """获取纯文本消息。这个方法将获取 chain 中所有 Plain 组件的文本并拼接成一条消息。空格分隔。"""
-        return " ".join([comp.text for comp in self.chain if isinstance(comp, Plain)])
+    def get_plain_text(self, with_other_comps_mark: bool = False) -> str:
+        """获取纯文本消息。这个方法将获取 chain 中所有 Plain 组件的文本并拼接成一条消息。空格分隔。
+
+        Args:
+            with_other_comps_mark (bool): 是否在纯文本中标记其他组件的位置
+        """
+        if not with_other_comps_mark:
+            return " ".join(
+                [comp.text for comp in self.chain if isinstance(comp, Plain)]
+            )
+        else:
+            texts = []
+            for comp in self.chain:
+                if isinstance(comp, Plain):
+                    texts.append(comp.text)
+                elif isinstance(comp, Json):
+                    texts.append(f"{comp.data}")
+                else:
+                    texts.append(f"[{comp.__class__.__name__}]")
+            return " ".join(texts)
 
     def squash_plain(self):
         """将消息链中的所有 Plain 消息段聚合到第一个 Plain 消息段中。"""
@@ -164,6 +182,8 @@ class ResultContentType(enum.Enum):
 
     LLM_RESULT = enum.auto()
     """调用 LLM 产生的结果"""
+    AGENT_RUNNER_ERROR = enum.auto()
+    """第三方 Agent Runner 返回的错误结果"""
     GENERAL_RESULT = enum.auto()
     """普通的消息结果"""
     STREAMING_RESULT = enum.auto()
@@ -227,6 +247,13 @@ class MessageEventResult(MessageChain):
     def is_llm_result(self) -> bool:
         """是否为 LLM 结果。"""
         return self.result_content_type == ResultContentType.LLM_RESULT
+
+    def is_model_result(self) -> bool:
+        """Whether result comes from model execution (including runner errors)."""
+        return self.result_content_type in (
+            ResultContentType.LLM_RESULT,
+            ResultContentType.AGENT_RUNNER_ERROR,
+        )
 
 
 # 为了兼容旧版代码，保留 CommandResult 的别名

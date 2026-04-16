@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useCustomizerStore } from '@/stores/customizer';
 import axios from 'axios';
 import Logo from '@/components/shared/Logo.vue';
@@ -9,7 +9,6 @@ import { useCommonStore } from '@/stores/common';
 import { MarkdownRender, enableKatex, enableMermaid } from 'markstream-vue';
 import 'markstream-vue/index.css';
 import 'katex/dist/katex.min.css';
-import 'highlight.js/styles/github.css';
 import { useI18n } from '@/i18n/composables';
 import { router } from '@/router';
 import { useRoute } from 'vue-router';
@@ -18,6 +17,7 @@ import StyledMenu from '@/components/shared/StyledMenu.vue';
 import { useLanguageSwitcher } from '@/i18n/composables';
 import type { Locale } from '@/i18n/types';
 import AboutPage from '@/views/AboutPage.vue';
+import { getDesktopRuntimeInfo } from '@/utils/desktopRuntime';
 
 enableKatex();
 enableMermaid();
@@ -26,6 +26,8 @@ const customizer = useCustomizerStore();
 const theme = useTheme();
 const { t } = useI18n();
 const route = useRoute();
+const LAST_BOT_ROUTE_KEY = 'astrbot:last_bot_route';
+const LAST_CHAT_ROUTE_KEY = 'astrbot:last_chat_route';
 let dialog = ref(false);
 let accountWarning = ref(false)
 let updateStatusDialog = ref(false);
@@ -33,6 +35,7 @@ let aboutDialog = ref(false);
 const username = localStorage.getItem('user');
 let password = ref('');
 let newPassword = ref('');
+let confirmPassword = ref('');
 let newUsername = ref('');
 let status = ref('');
 let updateStatus = ref('')
@@ -45,6 +48,40 @@ let version = ref('');
 let releases = ref([]);
 let updatingDashboardLoading = ref(false);
 let installLoading = ref(false);
+const isDesktopReleaseMode = ref(
+  typeof window !== 'undefined' && !!window.astrbotDesktop?.isDesktop
+);
+const desktopUpdateDialog = ref(false);
+const desktopUpdateChecking = ref(false);
+const desktopUpdateInstalling = ref(false);
+const desktopUpdateHasNewVersion = ref(false);
+const desktopUpdateCurrentVersion = ref('-');
+const desktopUpdateLatestVersion = ref('-');
+const desktopUpdateStatus = ref('');
+const isChatPath = computed(() =>
+  route.path === '/chat' || route.path.startsWith('/chat/')
+);
+const getAppUpdaterBridge = (): AstrBotAppUpdaterBridge | null => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const bridge = window.astrbotAppUpdater;
+  if (
+    bridge &&
+    typeof bridge.checkForAppUpdate === 'function' &&
+    typeof bridge.installAppUpdate === 'function'
+  ) {
+    return bridge;
+  }
+  return null;
+};
+
+const getSelectedGitHubProxy = () => {
+  if (typeof window === "undefined" || !window.localStorage) return "";
+  return localStorage.getItem("githubProxyRadioValue") === "1"
+    ? localStorage.getItem("selectedGitHubProxy") || ""
+    : "";
+};
 
 // Release Notes Modal
 let releaseNotesDialog = ref(false);
@@ -58,12 +95,15 @@ const releasesHeader = computed(() => [
   { title: t('core.header.updateDialog.table.sourceUrl'), key: 'zipball_url' },
   { title: t('core.header.updateDialog.table.actions'), key: 'switch' }
 ]);
-
 // Form validation
 const formValid = ref(true);
 const passwordRules = computed(() => [
   (v: string) => !!v || t('core.header.accountDialog.validation.passwordRequired'),
   (v: string) => v.length >= 8 || t('core.header.accountDialog.validation.passwordMinLength')
+]);
+const confirmPasswordRules = computed(() => [
+  (v: string) => !newPassword.value || !!v || t('core.header.accountDialog.validation.passwordRequired'),
+  (v: string) => !newPassword.value || v === newPassword.value || t('core.header.accountDialog.validation.passwordMatch')
 ]);
 const usernameRules = computed(() => [
   (v: string) => !v || v.length >= 3 || t('core.header.accountDialog.validation.usernameMinLength')
@@ -72,6 +112,7 @@ const usernameRules = computed(() => [
 // 显示密码相关
 const showPassword = ref(false);
 const showNewPassword = ref(false);
+const showConfirmPassword = ref(false);
 
 // 账户修改状态
 const accountEditStatus = ref({
@@ -81,9 +122,94 @@ const accountEditStatus = ref({
   message: ''
 });
 
-const open = (link: string) => {
-  window.open(link, '_blank');
-};
+function cancelDesktopUpdate() {
+  if (desktopUpdateInstalling.value) {
+    return;
+  }
+  desktopUpdateDialog.value = false;
+}
+
+async function openDesktopUpdateDialog() {
+  desktopUpdateDialog.value = true;
+  desktopUpdateChecking.value = true;
+  desktopUpdateInstalling.value = false;
+  desktopUpdateHasNewVersion.value = false;
+  desktopUpdateCurrentVersion.value = '-';
+  desktopUpdateLatestVersion.value = '-';
+  desktopUpdateStatus.value = t('core.header.updateDialog.desktopApp.checking');
+
+  const bridge = getAppUpdaterBridge();
+  if (!bridge) {
+    desktopUpdateChecking.value = false;
+    desktopUpdateStatus.value = t('core.header.updateDialog.desktopApp.checkFailed');
+    return;
+  }
+
+  try {
+    const result = await bridge.checkForAppUpdate();
+    if (!result?.ok) {
+      desktopUpdateCurrentVersion.value = result?.currentVersion || '-';
+      desktopUpdateLatestVersion.value =
+        result?.latestVersion || result?.currentVersion || '-';
+      desktopUpdateStatus.value =
+        result?.reason || t('core.header.updateDialog.desktopApp.checkFailed');
+      return;
+    }
+
+    desktopUpdateCurrentVersion.value = result.currentVersion || '-';
+    desktopUpdateLatestVersion.value =
+      result.latestVersion || result.currentVersion || '-';
+    desktopUpdateHasNewVersion.value = !!result.hasUpdate;
+    desktopUpdateStatus.value = result.hasUpdate
+      ? t('core.header.updateDialog.desktopApp.hasNewVersion')
+      : t('core.header.updateDialog.desktopApp.isLatest');
+  } catch (error) {
+    console.error(error);
+    desktopUpdateStatus.value = t('core.header.updateDialog.desktopApp.checkFailed');
+  } finally {
+    desktopUpdateChecking.value = false;
+  }
+}
+
+async function confirmDesktopUpdate() {
+  if (!desktopUpdateHasNewVersion.value || desktopUpdateInstalling.value) {
+    return;
+  }
+
+  const bridge = getAppUpdaterBridge();
+  if (!bridge) {
+    desktopUpdateStatus.value = t('core.header.updateDialog.desktopApp.installFailed');
+    return;
+  }
+
+  desktopUpdateInstalling.value = true;
+  desktopUpdateStatus.value = t('core.header.updateDialog.desktopApp.installing');
+
+  try {
+    const result = await bridge.installAppUpdate();
+    if (result?.ok) {
+      desktopUpdateDialog.value = false;
+      return;
+    }
+    desktopUpdateStatus.value =
+      result?.reason || t('core.header.updateDialog.desktopApp.installFailed');
+  } catch (error) {
+    console.error(error);
+    desktopUpdateStatus.value = t('core.header.updateDialog.desktopApp.installFailed');
+  } finally {
+    desktopUpdateInstalling.value = false;
+  }
+}
+
+function handleUpdateClick() {
+  if (isDesktopReleaseMode.value) {
+    void openDesktopUpdateDialog();
+    return;
+  }
+  checkUpdate();
+  getReleases();
+  updateStatusDialog.value = true;
+}
 
 // 检测是否为预发布版本
 const isPreRelease = (version: string) => {
@@ -98,17 +224,14 @@ function accountEdit() {
   accountEditStatus.value.error = false;
   accountEditStatus.value.success = false;
 
-  // md5加密
-  // @ts-ignore
-  if (password.value != '') {
-    password.value = md5(password.value);
-  }
-  if (newPassword.value != '') {
-    newPassword.value = md5(newPassword.value);
-  }
+  const passwordHash = password.value ? md5(password.value) : '';
+  const newPasswordHash = newPassword.value ? md5(newPassword.value) : '';
+  const confirmPasswordHash = confirmPassword.value ? md5(confirmPassword.value) : '';
+
   axios.post('/api/auth/account/edit', {
-    password: password.value,
-    new_password: newPassword.value,
+    password: passwordHash,
+    new_password: newPasswordHash,
+    confirm_password: confirmPasswordHash,
     new_username: newUsername.value ? newUsername.value : username
   })
     .then((res) => {
@@ -117,6 +240,7 @@ function accountEdit() {
         accountEditStatus.value.message = res.data.message;
         password.value = '';
         newPassword.value = '';
+        confirmPassword.value = '';
         return;
       }
       accountEditStatus.value.success = true;
@@ -133,6 +257,7 @@ function accountEdit() {
       accountEditStatus.value.message = typeof err === 'string' ? err : t('core.header.accountDialog.messages.updateFailed');
       password.value = '';
       newPassword.value = '';
+      confirmPassword.value = '';
     })
     .finally(() => {
       accountEditStatus.value.loading = false;
@@ -170,7 +295,9 @@ function checkUpdate() {
       } else {
         updateStatus.value = res.data.message;
       }
-      dashboardHasNewVersion.value = res.data.data.dashboard_has_new_version;
+      dashboardHasNewVersion.value = isDesktopReleaseMode.value
+        ? false
+        : res.data.data.dashboard_has_new_version;
     })
     .catch((err) => {
       if (err.response && err.response.status == 401) {
@@ -185,7 +312,7 @@ function checkUpdate() {
 }
 
 function getReleases() {
-  axios.get('/api/update/releases')
+  return axios.get('/api/update/releases')
     .then((res) => {
       releases.value = res.data.data.map((item: any) => {
         item.published_at = new Date(item.published_at).toLocaleString();
@@ -204,7 +331,7 @@ function switchVersion(version: string) {
   installLoading.value = true;
   axios.post('/api/update/do', {
     version: version,
-    proxy: localStorage.getItem('selectedGitHubProxy') || ''
+    proxy: getSelectedGitHubProxy()
   })
     .then((res) => {
       updateStatus.value = res.data.message;
@@ -255,7 +382,7 @@ function openReleaseNotesDialog(body: string, tag: string) {
 }
 
 function handleLogoClick() {
-  if (customizer.viewMode === 'chat') {
+  if (isChatPath.value) {
     aboutDialog.value = true;
   } else {
     router.push('/about');
@@ -270,19 +397,83 @@ commonStore.createEventSource(); // log
 commonStore.getStartTime();
 
 // 视图模式切换
-const viewMode = computed({
-  get: () => customizer.viewMode,
-  set: (value: 'bot' | 'chat') => {
-    customizer.SET_VIEW_MODE(value);
+onMounted(() => {
+  // 初次加載時保存當前路由
+  if (typeof window !== 'undefined') {
+    if (isChatPath.value) {
+      // 保存 chat ID
+      const parts = route.fullPath.split('/');
+      const sessionId = parts[2];
+      if (sessionId) {
+        sessionStorage.setItem(LAST_CHAT_ROUTE_KEY, sessionId);
+        console.log('Initial save chat ID:', sessionId);
+      }
+    } else {
+      // 保存 bot 路由（非 chat 頁面）
+      sessionStorage.setItem(LAST_BOT_ROUTE_KEY, route.fullPath);
+      console.log('Initial save bot route:', route.fullPath);
+    }
   }
 });
 
 // 监听 viewMode 变化，切换到 bot 模式时跳转到首页
-watch(() => customizer.viewMode, (newMode, oldMode) => {
-  if (newMode === 'bot' && oldMode === 'chat') {
-    // 从 chat 模式切换到 bot 模式时，跳转到首页
-    if (route.path !== '/') {
-      router.push('/');
+// 保存 bot 模式的最後路由
+// 監聽 route 變化，保存最後一次 bot 路由
+watch(() => route.fullPath, (newPath) => {
+  if (typeof window === 'undefined') return;
+  console.log('Route changed:', {
+    newPath,
+    isChat: isChatPath.value,
+    currentChatId: route.params.id
+  });
+  try {
+    // 使用現有的 isChatPath 計算屬性來避免名稱衝突
+    const isChat = isChatPath.value; // 這裡使用已經計算好的 isChatPath
+
+    // ✅ bot：只存「非 chat 頁」
+    if (!isChat) {
+      sessionStorage.setItem(LAST_BOT_ROUTE_KEY, newPath);
+    }
+
+    // ✅ chat：只存 sessionId
+    if (isChat) {
+      const parts = newPath.split('/');
+      const sessionId = parts[2];
+
+      if (sessionId) {
+        sessionStorage.setItem(LAST_CHAT_ROUTE_KEY, sessionId);
+      }
+    }
+
+  } catch (e) {
+    console.error('Failed to save route:', e);
+  }
+});
+
+const currentMode = computed({
+  get: () => (isChatPath.value ? 'chat' : 'bot'),
+  set: (val: 'chat' | 'bot') => {
+    try {
+      // 檢查 window 和 sessionStorage 是否存在
+      if (typeof window === 'undefined' || typeof sessionStorage === 'undefined') {
+        // 如果在非瀏覽器環境中，不做任何 sessionStorage 操作
+        console.warn('sessionStorage is not available in this environment');
+        return;
+      }
+
+      if (val === 'chat') {
+        const lastSessionId = sessionStorage.getItem(LAST_CHAT_ROUTE_KEY);
+        router.push(lastSessionId ? `/chat/${lastSessionId}` : '/chat');
+      } else {
+        let lastBotRoute = sessionStorage.getItem(LAST_BOT_ROUTE_KEY) || '/';
+        if (lastBotRoute.startsWith('/chat')) {
+          lastBotRoute = '/';
+        }
+        router.push(lastBotRoute);
+      }
+    } catch (e) {
+      // 在受限隱私模式等環境中，sessionStorage 操作可能會拋出 SecurityError
+      console.warn('Failed to access sessionStorage in currentMode setter:', e);
     }
   }
 });
@@ -296,6 +487,7 @@ const isChristmas = computed(() => {
 });
 
 // 语言切换相关
+const mainMenuOpen = ref(false);
 const { languageOptions, currentLanguage, switchLanguage, locale } = useLanguageSwitcher();
 const languages = computed(() => 
   languageOptions.value.map(lang => ({
@@ -307,40 +499,63 @@ const languages = computed(() =>
 const currentLocale = computed(() => locale.value);
 const changeLanguage = async (langCode: string) => {
   await switchLanguage(langCode as Locale);
+  mainMenuOpen.value = false;
 };
+
+onMounted(async () => {
+  const runtimeInfo = await getDesktopRuntimeInfo();
+  isDesktopReleaseMode.value = runtimeInfo.isDesktopRuntime;
+  if (isDesktopReleaseMode.value) {
+    dashboardHasNewVersion.value = false;
+  }
+});
 
 </script>
 
 <template>
-  <v-app-bar elevation="0" height="55">
+  <v-app-bar elevation="0" height="50" class="top-header">
 
     <!-- 桌面端 menu 按钮 - 仅在 bot 模式下显示 -->
-    <v-btn v-if="customizer.viewMode === 'bot' && useCustomizerStore().uiTheme === 'PurpleTheme'" style="margin-left: 16px;"
-      class="hidden-md-and-down"  icon rounded="sm" variant="flat"
-      @click.stop="customizer.SET_MINI_SIDEBAR(!customizer.mini_sidebar)">
-      <v-icon>mdi-menu</v-icon>
-    </v-btn>
-    <v-btn v-else-if="customizer.viewMode === 'bot'"
-      style="margin-left: 22px;"
-      class="hidden-md-and-down" icon rounded="sm" variant="flat"
-      @click.stop="customizer.SET_MINI_SIDEBAR(!customizer.mini_sidebar)">
-      <v-icon>mdi-menu</v-icon>
-    </v-btn>
-    <!-- 移动端 menu 按钮 - 仅在 bot 模式下显示 -->
-    <v-btn v-if="customizer.viewMode === 'bot' && useCustomizerStore().uiTheme === 'PurpleTheme'" class="hidden-lg-and-up ms-3"
-      icon rounded="sm" variant="flat" @click.stop="customizer.SET_SIDEBAR_DRAWER">
-      <v-icon>mdi-menu</v-icon>
-    </v-btn>
-    <v-btn v-else-if="customizer.viewMode === 'bot'" class="hidden-lg-and-up ms-3" icon rounded="sm" variant="flat"
-      @click.stop="customizer.SET_SIDEBAR_DRAWER">
-      <v-icon>mdi-menu</v-icon>
-    </v-btn>
+<v-btn
+  v-if="!isChatPath"
+  style="margin-left: 16px;"
+  class="hidden-md-and-down"
+  icon
+  rounded="sm"
+  variant="flat"
+  @click.stop="customizer.SET_MINI_SIDEBAR(!customizer.mini_sidebar)"
+>
+  <v-icon>mdi-menu</v-icon>
+</v-btn>
 
-    <div class="logo-container" :class="{ 'mobile-logo': $vuetify.display.xs, 'chat-mode-logo': customizer.viewMode === 'chat' }" @click="handleLogoClick">
+<!-- 移动端 menu 按钮 -->
+<v-btn
+  v-if="!isChatPath"
+  class="hidden-lg-and-up ms-3"
+  icon
+  rounded="sm"
+  variant="flat"
+  @click.stop="customizer.SET_SIDEBAR_DRAWER"
+>
+  <v-icon>mdi-menu</v-icon>
+</v-btn>
+
+<v-btn
+  v-if="isChatPath"
+  class="hidden-lg-and-up ms-1"
+  icon
+  rounded="sm"
+  variant="flat"
+  @click.stop="customizer.TOGGLE_CHAT_SIDEBAR()"
+>
+  <v-icon>mdi-menu</v-icon>
+</v-btn>
+
+    <div class="logo-container" :class="{ 'mobile-logo': $vuetify.display.xs, 'chat-mode-logo': isChatPath }" @click="handleLogoClick">
       <span class="logo-text Outfit">Astr<span class="logo-text bot-text-wrapper">Bot
         <img v-if="isChristmas" src="@/assets/images/xmas-hat.png" alt="Christmas hat" class="xmas-hat" />
       </span></span>
-      <span class="logo-text logo-text-light Outfit" style="color: grey;" v-if="customizer.viewMode === 'chat'">ChatUI</span>
+      <span class="logo-text logo-text-light Outfit" style="color: grey;" v-if="isChatPath">ChatUI</span>
       <span class="version-text hidden-xs">{{ botCurrVersion }}</span>
     </div>
 
@@ -351,33 +566,33 @@ const changeLanguage = async (langCode: string) => {
       <small v-if="hasNewVersion">
         {{ t('core.header.version.hasNewVersion') }}
       </small>
-      <small v-else-if="dashboardHasNewVersion">
+      <small v-else-if="dashboardHasNewVersion && !isDesktopReleaseMode">
         {{ t('core.header.version.dashboardHasNewVersion') }}
       </small>
     </div>
     
-    <!-- Bot/Chat 模式切换按钮 -->
-    <v-btn-toggle
-      v-model="viewMode"
-      mandatory
-      variant="outlined"
-      density="compact"
-      class="mr-4"
-      color="primary"
-    >
-      <v-btn value="bot" size="small">
-        <v-icon start>mdi-robot</v-icon>
-        Bot
-      </v-btn>
-      <v-btn value="chat" size="small">
-        <v-icon start>mdi-chat</v-icon>
-        Chat
-      </v-btn>
-    </v-btn-toggle>
+    <!-- Bot/Chat 模式切换按钮 - 手机端隐藏，移入 ... 菜单 -->
+<v-btn-toggle
+  v-model="currentMode"
+  mandatory
+  variant="outlined"
+  density="compact"
+  class="mr-4 hidden-xs"
+  color="primary"
+>
+  <v-btn value="bot" size="small">
+    <v-icon start>mdi-robot</v-icon>
+    Bot
+  </v-btn>
+  <v-btn value="chat" size="small">
+    <v-icon start>mdi-chat</v-icon>
+    Chat
+  </v-btn>
+</v-btn-toggle>
 
 
     <!-- 功能菜单 -->
-    <StyledMenu offset="12" location="bottom end">
+    <StyledMenu v-model="mainMenuOpen" offset="12" location="bottom end">
       <template v-slot:activator="{ props: activatorProps }">
         <v-btn
           v-bind="activatorProps"
@@ -392,21 +607,76 @@ const changeLanguage = async (langCode: string) => {
         </v-btn>
       </template>
 
-      <!-- 语言切换 -->
-      <v-list-item
-        v-for="lang in languages"
-        :key="lang.code"
-        :value="lang.code"
-        @click="changeLanguage(lang.code)"
-        :class="{ 'styled-menu-item-active': currentLocale === lang.code }"
-        class="styled-menu-item"
-        rounded="md"
+      <!-- Bot/Chat 模式切换 - 仅在手机端显示 -->
+      <template v-if="$vuetify.display.xs">
+        <div class="mobile-mode-toggle-wrapper">
+<v-btn-toggle
+  v-model="currentMode"
+  mandatory
+  variant="outlined"
+  density="compact"
+  class="mobile-mode-toggle"
+  color="primary"
+>
+            <v-btn value="bot" size="small">
+              <v-icon start>mdi-robot</v-icon>
+              Bot
+            </v-btn>
+            <v-btn value="chat" size="small">
+              <v-icon start>mdi-chat</v-icon>
+              Chat
+            </v-btn>
+          </v-btn-toggle>
+        </div>
+        <v-divider class="my-1" />
+      </template>
+
+      <!-- 语言切换分组 -->
+      <v-menu
+        open-on-click
+        :open-on-hover="!$vuetify.display.xs"
+        :open-delay="!$vuetify.display.xs ? 60 : 0"
+        :close-delay="!$vuetify.display.xs ? 120 : 0"
+        :location="$vuetify.display.xs ? 'bottom' : 'start center'"
+        offset="8"
       >
-        <template v-slot:prepend>
-          <span class="language-flag">{{ lang.flag }}</span>
+        <template v-slot:activator="{ props: languageMenuProps }">
+          <v-list-item
+            v-bind="languageMenuProps"
+            @click.stop
+            class="styled-menu-item language-group-trigger"
+            rounded="md"
+          >
+            <template v-slot:prepend>
+              <v-icon>mdi-translate</v-icon>
+            </template>
+            <v-list-item-title>{{ t('core.common.language') }}</v-list-item-title>
+            <template v-slot:append>
+              <span class="language-group-current">{{ currentLanguage?.flag }}</span>
+              <v-icon size="18" class="language-group-arrow">mdi-chevron-right</v-icon>
+            </template>
+          </v-list-item>
         </template>
-        <v-list-item-title>{{ lang.name }}</v-list-item-title>
-      </v-list-item>
+
+        <v-card class="styled-menu-card" style="min-width: 180px;" elevation="8" rounded="lg">
+          <v-list density="compact" class="styled-menu-list pa-1">
+            <v-list-item
+              v-for="lang in languages"
+              :key="lang.code"
+              :value="lang.code"
+              @click="changeLanguage(lang.code)"
+              :class="{ 'styled-menu-item-active': currentLocale === lang.code }"
+              class="styled-menu-item"
+              rounded="md"
+            >
+              <template v-slot:prepend>
+                <span class="language-flag">{{ lang.flag }}</span>
+              </template>
+              <v-list-item-title>{{ lang.name }}</v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-card>
+      </v-menu>
 
       <!-- 主题切换 -->
       <v-list-item
@@ -426,7 +696,7 @@ const changeLanguage = async (langCode: string) => {
 
       <!-- 更新按钮 -->
       <v-list-item
-        @click="checkUpdate(); getReleases(); updateStatusDialog = true"
+        @click="handleUpdateClick"
         class="styled-menu-item"
         rounded="md"
       >
@@ -434,7 +704,7 @@ const changeLanguage = async (langCode: string) => {
           <v-icon>mdi-arrow-up-circle</v-icon>
         </template>
         <v-list-item-title>{{ t('core.header.updateDialog.title') }}</v-list-item-title>
-        <template v-slot:append v-if="hasNewVersion || dashboardHasNewVersion">
+        <template v-slot:append v-if="hasNewVersion || (dashboardHasNewVersion && !isDesktopReleaseMode)">
           <v-chip size="x-small" color="primary" variant="tonal" class="ml-2">!</v-chip>
         </template>
       </v-list-item>
@@ -582,6 +852,44 @@ const changeLanguage = async (langCode: string) => {
       </v-card>
     </v-dialog>
 
+    <v-dialog v-model="desktopUpdateDialog" max-width="460">
+      <v-card>
+        <v-card-title class="text-h3 pa-4 pl-6 pb-0">
+          {{ t('core.header.updateDialog.desktopApp.title') }}
+        </v-card-title>
+        <v-card-text>
+          <div class="mb-3">
+            {{ t('core.header.updateDialog.desktopApp.message') }}
+          </div>
+          <v-alert type="info" variant="tonal" density="compact">
+            <div>
+              {{ t('core.header.updateDialog.desktopApp.currentVersion') }}
+              <strong>{{ desktopUpdateCurrentVersion }}</strong>
+            </div>
+            <div>
+              {{ t('core.header.updateDialog.desktopApp.latestVersion') }}
+              <strong v-if="!desktopUpdateChecking">{{ desktopUpdateLatestVersion }}</strong>
+              <v-progress-circular v-else indeterminate size="16" width="2" class="ml-1" />
+            </div>
+          </v-alert>
+          <div class="text-caption mt-3">
+            {{ desktopUpdateStatus }}
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn color="grey" variant="text" @click="cancelDesktopUpdate" :disabled="desktopUpdateInstalling">
+            {{ t('core.common.dialog.cancelButton') }}
+          </v-btn>
+          <v-btn color="primary" variant="flat" @click="confirmDesktopUpdate"
+            :loading="desktopUpdateInstalling"
+            :disabled="desktopUpdateChecking || desktopUpdateInstalling || !desktopUpdateHasNewVersion">
+            {{ t('core.common.dialog.confirmButton') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- 账户对话框 -->
     <v-dialog v-model="dialog" persistent :max-width="$vuetify.display.xs ? '90%' : '500'">
       <v-card class="account-dialog">
@@ -609,9 +917,15 @@ const changeLanguage = async (langCode: string) => {
 
             <v-text-field v-model="newPassword" :append-inner-icon="showNewPassword ? 'mdi-eye-off' : 'mdi-eye'"
               :type="showNewPassword ? 'text' : 'password'" :rules="passwordRules"
-              :label="t('core.header.accountDialog.form.newPassword')" variant="outlined" required clearable
+              :label="t('core.header.accountDialog.form.newPassword')" variant="outlined" clearable
               @click:append-inner="showNewPassword = !showNewPassword" prepend-inner-icon="mdi-lock-plus-outline"
               :hint="t('core.header.accountDialog.form.passwordHint')" persistent-hint class="mb-4"></v-text-field>
+
+            <v-text-field v-model="confirmPassword" :append-inner-icon="showConfirmPassword ? 'mdi-eye-off' : 'mdi-eye'"
+              :type="showConfirmPassword ? 'text' : 'password'" :rules="confirmPasswordRules"
+              :label="t('core.header.accountDialog.form.confirmPassword')" variant="outlined" clearable
+              @click:append-inner="showConfirmPassword = !showConfirmPassword" prepend-inner-icon="mdi-lock-check-outline"
+              :hint="t('core.header.accountDialog.form.confirmPasswordHint')" persistent-hint class="mb-4"></v-text-field>
 
             <v-text-field v-model="newUsername" :rules="usernameRules"
               :label="t('core.header.accountDialog.form.newUsername')" variant="outlined" clearable
@@ -712,6 +1026,10 @@ const changeLanguage = async (langCode: string) => {
   margin-left: 22px;
 }
 
+.mobile-logo.chat-mode-logo {
+  margin-left: 4px;
+}
+
 .logo-text {
   font-size: 24px;
   font-weight: 1000;
@@ -748,6 +1066,39 @@ const changeLanguage = async (langCode: string) => {
 .language-flag {
   font-size: 16px;
   margin-right: 8px;
+}
+
+.language-group-trigger :deep(.v-list-item__append) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.language-group-current {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.language-group-arrow {
+  opacity: 0.7;
+}
+
+.language-submenu-card {
+  min-width: 180px;
+}
+
+.mobile-mode-toggle-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: 8px 12px 4px;
+}
+
+.mobile-mode-toggle {
+  width: 100%;
+}
+
+.mobile-mode-toggle .v-btn {
+  flex: 1;
 }
 
 /* 移动端对话框标题样式 */

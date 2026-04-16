@@ -1,12 +1,14 @@
 import base64
-import os
 import traceback
 from io import BytesIO
+from typing import TYPE_CHECKING
 
 from astrbot.api import logger
-from astrbot.core.db.vec_db.faiss_impl import FaissVecDB
 from astrbot.core.knowledge_base.kb_helper import KBHelper
 from astrbot.core.knowledge_base.kb_mgr import KnowledgeBaseManager
+
+if TYPE_CHECKING:
+    from astrbot.core.db.vec_db.faiss_impl import FaissVecDB
 
 
 async def generate_tsne_visualization(
@@ -51,14 +53,14 @@ async def generate_tsne_visualization(
             return None
 
         kb = kb_helper.kb
-        index_path = f"data/knowledge_base/{kb.kb_id}/index.faiss"
+        index_path = kb_helper.kb_dir / "index.faiss"
 
         # 读取 FAISS 索引
-        if not os.path.exists(index_path):
-            logger.warning(f"FAISS 索引不存在: {index_path}")
+        if not index_path.exists():
+            logger.warning(f"FAISS 索引不存在: {index_path!s}")
             return None
 
-        index = faiss.read_index(index_path)
+        index = faiss.read_index(str(index_path))
 
         if index.ntotal == 0:
             logger.warning("索引为空")

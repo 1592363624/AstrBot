@@ -1,22 +1,34 @@
 {
+  "welcome": "Welcome",
   "dashboard": "Dashboard",
   "platforms": "Platforms",
   "providers": "Providers",
   "commands": "Commands",
   "persona": "Persona",
+  "subagent": "SubAgents",
   "toolUse": "MCP Tools",
   "config": "Config",
   "chat": "Chat",
+  "cron": "Future Tasks",
   "extension": "Extensions",
+  "extensionTabs": {
+    "installed": "AstrBot Plugins",
+    "market": "Plugin Market",
+    "mcp": "MCP Servers",
+    "skills": "Skills",
+    "components": "Handlers"
+  },
   "conversation": "Conversations",
   "sessionManagement": "Custom Rules",
   "console": "Console",
+  "trace": "Trace",
   "alkaid": "Alkaid Lab",
   "knowledgeBase": "Knowledge Base",
   "about": "About",
   "settings": "Settings",
   "changelog": "Changelog",
   "documentation": "Documentation",
+  "faq": "FAQ",
   "github": "GitHub",
   "drag": "Drag",
   "groups": {
@@ -29,5 +41,9 @@
     "notFound": "Changelog for this version not found",
     "selectVersion": "Select Version",
     "current": "Current"
+  },
+  "configTabs": {
+    "normal": "Normal Config",
+    "system": "System Config"
   }
 }

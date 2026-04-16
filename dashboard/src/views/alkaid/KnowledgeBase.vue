@@ -1,5 +1,5 @@
 <template>
-    <div class="flex-grow-1" style="display: flex; flex-direction: column; height: 100%;">
+    <div class="knowledge-base-view flex-grow-1" style="display: flex; flex-direction: column; height: 100%;">
         <div style="flex-grow: 1; width: 100%; border: 1px solid #eee; border-radius: 8px; padding: 16px">
             <v-banner lines="one">
                 <template v-slot:text>
@@ -18,7 +18,7 @@
                     {{ tm('notInstalled.install') }}
                 </v-btn>
                 <ConsoleDisplayer v-show="installing"
-                    style="background-color: #fff; max-height: 300px; margin-top: 16px; max-width: 100%"
+                    style="max-height: 300px; margin-top: 16px; max-width: 100%"
                     :show-level-btns="false"></ConsoleDisplayer>
             </div>
             <div v-else-if="kbCollections.length == 0" class="d-flex align-center justify-center flex-column"
@@ -353,10 +353,11 @@
                         <v-window-item value="search">
                             <div class="search-container pa-4">
                                 <v-form @submit.prevent="searchKnowledgeBase" class="d-flex align-center">
-                                    <v-text-field v-model="searchQuery" :label="tm('search.queryLabel')"
+                                    <v-text-field :model-value="searchQuery"
+                                        @update:model-value="onSearchQueryInput" :label="tm('search.queryLabel')"
                                         append-icon="mdi-magnify" variant="outlined" class="flex-grow-1 me-2"
                                         @click:append="searchKnowledgeBase" @keyup.enter="searchKnowledgeBase"
-                                        :placeholder="tm('search.queryPlaceholder')" hide-details></v-text-field>
+                                        :placeholder="tm('search.queryPlaceholder')" hide-details clearable></v-text-field>
 
                                     <v-select v-model="topK" :items="[3, 5, 10, 20]"
                                         :label="tm('search.resultCountLabel')" variant="outlined"
@@ -434,6 +435,7 @@
 import axios from 'axios';
 import ConsoleDisplayer from '@/components/shared/ConsoleDisplayer.vue';
 import { useModuleI18n } from '@/i18n/composables';
+import { normalizeTextInput } from '@/utils/inputValue';
 
 export default {
     name: 'KnowledgeBase',
@@ -580,6 +582,15 @@ export default {
         this.getProviderList();
     },
     methods: {
+        onSearchQueryInput(value) {
+            this.searchQuery = normalizeTextInput(value);
+        },
+        getSelectedGitHubProxy() {
+            if (typeof window === "undefined" || !window.localStorage) return "";
+            return localStorage.getItem("githubProxyRadioValue") === "1"
+                ? localStorage.getItem("selectedGitHubProxy") || ""
+                : "";
+        },
         llmModelProps(providerConfig) {
             return {
                 title: providerConfig.llm_model || providerConfig.id,
@@ -675,7 +686,7 @@ export default {
             try {
                 const response = await axios.post('/api/plugin/update', {
                     name: 'astrbot_plugin_knowledge_base',
-                    proxy: localStorage.getItem('selectedGitHubProxy') || ""
+                    proxy: this.getSelectedGitHubProxy()
                 });
 
                 if (response.data.status === 'ok') {
@@ -699,7 +710,7 @@ export default {
             this.installing = true;
             axios.post('/api/plugin/install', {
                 url: "https://github.com/lxfight/astrbot_plugin_knowledge_base",
-                proxy: localStorage.getItem('selectedGitHubProxy') || ""
+                proxy: this.getSelectedGitHubProxy()
             })
                 .then(response => {
                     if (response.data.status === 'ok') {
@@ -897,7 +908,8 @@ export default {
         },
 
         searchKnowledgeBase() {
-            if (!this.searchQuery.trim()) {
+            const query = normalizeTextInput(this.searchQuery).trim();
+            if (!query) {
                 this.showSnackbar(this.tm('messages.pleaseEnterSearchContent'), 'warning');
                 return;
             }
@@ -908,7 +920,7 @@ export default {
             axios.get(`/api/plug/alkaid/kb/collection/search`, {
                 params: {
                     collection_name: this.currentKB.collection_name,
-                    query: this.searchQuery,
+                    query,
                     top_k: this.topK
                 }
             })
@@ -1359,5 +1371,19 @@ export default {
 
 .data-source-select :deep(.v-field__prepend-inner) {
     padding-right: 12px;
+}
+</style>
+
+<style>
+.v-theme--PurpleThemeDark .knowledge-base-view .book-content {
+    background: linear-gradient(145deg, rgb(var(--v-theme-background)) 0%, rgb(var(--v-theme-lightprimary)) 100%);
+}
+
+.v-theme--PurpleThemeDark .knowledge-base-view .kb-name {
+    color: rgba(var(--v-theme-on-surface-variant), 0.84);
+}
+
+.v-theme--PurpleThemeDark .knowledge-base-view .kb-count {
+    color: rgba(var(--v-theme-on-surface-variant), 0.58);
 }
 </style>

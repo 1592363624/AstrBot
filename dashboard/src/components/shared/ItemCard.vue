@@ -10,7 +10,7 @@
             density="compact"
             :model-value="getItemEnabled()"
             :loading="loading"
-            :disabled="loading"
+            :disabled="loading || disableToggle"
             v-bind="props"
             @update:model-value="toggleEnabled"
           ></v-switch>
@@ -23,27 +23,28 @@
       <slot name="item-details" :item="item"></slot>
     </v-card-text>
 
-    <v-card-actions style="margin: 8px;">
-      <v-btn
-        variant="outlined"
-        color="error"
-        size="small"
-        rounded="xl"
-        :disabled="loading"
-        @click="$emit('delete', item)"
-      >
-        {{ t('core.common.itemCard.delete') }}
-      </v-btn>
-      <v-btn
-        variant="tonal"
-        color="primary"
-        size="small"
-        rounded="xl"
-        :disabled="loading"
-        @click="$emit('edit', item)"
-      >
-        {{ t('core.common.itemCard.edit') }}
-      </v-btn>
+  <v-card-actions style="margin: 8px;">
+    <v-btn
+      variant="outlined"
+      color="error"
+      size="small"
+      rounded="xl"
+      :disabled="loading || disableDelete"
+      @click="$emit('delete', item)"
+    >
+      {{ t('core.common.itemCard.delete') }}
+    </v-btn>
+    <v-btn
+      v-if="showEditButton"
+      variant="tonal"
+      color="primary"
+      size="small"
+      rounded="xl"
+      :disabled="loading"
+      @click="$emit('edit', item)"
+    >
+      {{ t('core.common.itemCard.edit') }}
+    </v-btn>
       <v-btn
         v-if="showCopyButton"
         variant="tonal"
@@ -103,6 +104,18 @@ export default {
     showCopyButton: {
       type: Boolean,
       default: false
+    },
+    showEditButton: {
+      type: Boolean,
+      default: true
+    },
+    disableToggle: {
+      type: Boolean,
+      default: false
+    },
+    disableDelete: {
+      type: Boolean,
+      default: false
     }
   },
   emits: ['toggle-enabled', 'delete', 'edit', 'copy'],
@@ -127,6 +140,7 @@ export default {
   transition: all 0.3s ease;
   overflow: hidden;
   min-height: 220px;
+  height: 100%;
   display: flex;
   flex-direction: column;
   justify-content: space-between;

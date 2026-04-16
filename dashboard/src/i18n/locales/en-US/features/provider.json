@@ -21,6 +21,7 @@
     },
     "description": {
       "openai": "Supports all OpenAI API compatible providers.",
+      "kimi_code": "Dedicated Kimi CodingPlan / Kimi Code integration using a custom Anthropic API compatibility layer.",
       "default": ""
     }
   },
@@ -91,8 +92,10 @@
   },
   "providerSources": {
     "title": "Provider Sources",
+    "add": "Add",
     "empty": "No provider sources",
     "selectHint": "Please select a provider source",
+    "selectCreated": "Select created provider source",
     "save": "Save Configuration",
     "saveAndFetchModels": "Save and Fetch Models",
     "fetchModels": "Fetch Model List",
@@ -108,6 +111,15 @@
       "name": "Name",
       "apiKey": "API Key",
       "baseUrl": "Base URL"
+    },
+    "hints": {
+      "id": "Provider source ID (not provider ID)",
+      "key": "API key for authentication",
+      "apiBase": "Custom API endpoint URL",
+      "proxy": "HTTP/HTTPS proxy address, e.g. http://127.0.0.1:7890. Only affects this provider's API requests, doesn't interfere with Docker internal networking."
+    },
+    "labels": {
+      "proxy": "Proxy"
     }
   },
   "models": {
@@ -121,6 +133,7 @@
     "deleteSuccess": "Model deleted successfully",
     "deleteError": "Failed to delete model",
     "testSuccess": "Model {id} test passed",
+    "testSuccessWithLatency": "Model {id} test passed, latency {latency} ms",
     "testError": "Model test failed",
     "searchPlaceholder": "Search models or ID",
     "manualAddButton": "Custom Model",
@@ -129,6 +142,11 @@
     "manualDialogPreviewLabel": "Display ID (auto generated)",
     "manualDialogPreviewHint": "Generated as sourceId/modelId",
     "manualModelRequired": "Please enter a model ID",
-    "manualModelExists": "Model already exists"
+    "manualModelExists": "Model already exists",
+    "configure": "Configure",
+    "tooltips": {
+      "providerId": "Provider ID",
+      "modelId": "Model ID"
+    }
   }
-} 
+}

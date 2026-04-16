@@ -8,15 +8,21 @@ from deprecated import deprecated
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from astrbot.core.db.po import (
+    ApiKey,
     Attachment,
+    ChatUIProject,
     CommandConfig,
     CommandConflict,
     ConversationV2,
+    CronJob,
     Persona,
+    PersonaFolder,
     PlatformMessageHistory,
     PlatformSession,
     PlatformStat,
     Preference,
+    ProviderStat,
+    SessionProjectRelation,
     Stats,
 )
 
@@ -28,10 +34,18 @@ class BaseDatabase(abc.ABC):
     DATABASE_URL = ""
 
     def __init__(self) -> None:
+        # SQLite only supports a single writer at a time.  Without a busy
+        # timeout the driver raises "database is locked" instantly when a
+        # second write is attempted.  Setting timeout=30 tells SQLite to
+        # wait up to 30 s for the lock, which is enough to ride out brief
+        # write bursts from concurrent agent/metrics/session operations.
+        is_sqlite = "sqlite" in self.DATABASE_URL
+        connect_args = {"timeout": 30} if is_sqlite else {}
         self.engine = create_async_engine(
             self.DATABASE_URL,
             echo=False,
             future=True,
+            connect_args=connect_args,
         )
         self.AsyncSessionLocal = async_sessionmaker(
             self.engine,
@@ -39,7 +53,7 @@ class BaseDatabase(abc.ABC):
             expire_on_commit=False,
         )
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """初始化数据库连接"""
 
     @asynccontextmanager
@@ -90,6 +104,21 @@ class BaseDatabase(abc.ABC):
     @abc.abstractmethod
     async def get_platform_stats(self, offset_sec: int = 86400) -> list[PlatformStat]:
         """Get platform statistics within the specified offset in seconds and group by platform_id."""
+        ...
+
+    @abc.abstractmethod
+    async def insert_provider_stat(
+        self,
+        *,
+        umo: str,
+        provider_id: str,
+        provider_model: str | None = None,
+        conversation_id: str | None = None,
+        status: str = "completed",
+        stats: dict | None = None,
+        agent_type: str = "internal",
+    ) -> ProviderStat:
+        """Insert a per-response provider stat record."""
         ...
 
     @abc.abstractmethod
@@ -152,6 +181,7 @@ class BaseDatabase(abc.ABC):
         title: str | None = None,
         persona_id: str | None = None,
         content: list[dict] | None = None,
+        token_usage: int | None = None,
     ) -> None:
         """Update a conversation's history."""
         ...
@@ -244,14 +274,78 @@ class BaseDatabase(abc.ABC):
         ...
 
     @abc.abstractmethod
+    async def create_api_key(
+        self,
+        name: str,
+        key_hash: str,
+        key_prefix: str,
+        scopes: list[str] | None,
+        created_by: str,
+        expires_at: datetime.datetime | None = None,
+    ) -> ApiKey:
+        """Create a new API key record."""
+        ...
+
+    @abc.abstractmethod
+    async def list_api_keys(self) -> list[ApiKey]:
+        """List all API keys."""
+        ...
+
+    @abc.abstractmethod
+    async def get_api_key_by_id(self, key_id: str) -> ApiKey | None:
+        """Get an API key by key_id."""
+        ...
+
+    @abc.abstractmethod
+    async def get_active_api_key_by_hash(self, key_hash: str) -> ApiKey | None:
+        """Get an active API key by hash (not revoked, not expired)."""
+        ...
+
+    @abc.abstractmethod
+    async def touch_api_key(self, key_id: str) -> None:
+        """Update last_used_at of an API key."""
+        ...
+
+    @abc.abstractmethod
+    async def revoke_api_key(self, key_id: str) -> bool:
+        """Revoke an API key.
+
+        Returns True when the key exists and is updated.
+        """
+        ...
+
+    @abc.abstractmethod
+    async def delete_api_key(self, key_id: str) -> bool:
+        """Delete an API key.
+
+        Returns True when the key exists and is deleted.
+        """
+        ...
+
+    @abc.abstractmethod
     async def insert_persona(
         self,
         persona_id: str,
         system_prompt: str,
         begin_dialogs: list[str] | None = None,
         tools: list[str] | None = None,
+        skills: list[str] | None = None,
+        custom_error_message: str | None = None,
+        folder_id: str | None = None,
+        sort_order: int = 0,
     ) -> Persona:
-        """Insert a new persona record."""
+        """Insert a new persona record.
+
+        Args:
+            persona_id: Unique identifier for the persona
+            system_prompt: System prompt for the persona
+            begin_dialogs: Optional list of initial dialog strings
+            tools: Optional list of tool names (None means all tools, [] means no tools)
+            skills: Optional list of skill names (None means all skills, [] means no skills)
+            custom_error_message: Optional persona-level fallback error message
+            folder_id: Optional folder ID to place the persona in (None means root)
+            sort_order: Sort order within the folder (default 0)
+        """
         ...
 
     @abc.abstractmethod
@@ -271,6 +365,8 @@ class BaseDatabase(abc.ABC):
         system_prompt: str | None = None,
         begin_dialogs: list[str] | None = None,
         tools: list[str] | None = None,
+        skills: list[str] | None = None,
+        custom_error_message: str | None = None,
     ) -> Persona | None:
         """Update a persona's system prompt or begin dialogs."""
         ...
@@ -278,6 +374,84 @@ class BaseDatabase(abc.ABC):
     @abc.abstractmethod
     async def delete_persona(self, persona_id: str) -> None:
         """Delete a persona by its ID."""
+        ...
+
+    # ====
+    # Persona Folder Management
+    # ====
+
+    @abc.abstractmethod
+    async def insert_persona_folder(
+        self,
+        name: str,
+        parent_id: str | None = None,
+        description: str | None = None,
+        sort_order: int = 0,
+    ) -> PersonaFolder:
+        """Insert a new persona folder."""
+        ...
+
+    @abc.abstractmethod
+    async def get_persona_folder_by_id(self, folder_id: str) -> PersonaFolder | None:
+        """Get a persona folder by its folder_id."""
+        ...
+
+    @abc.abstractmethod
+    async def get_persona_folders(
+        self, parent_id: str | None = None
+    ) -> list[PersonaFolder]:
+        """Get all persona folders, optionally filtered by parent_id."""
+        ...
+
+    @abc.abstractmethod
+    async def get_all_persona_folders(self) -> list[PersonaFolder]:
+        """Get all persona folders."""
+        ...
+
+    @abc.abstractmethod
+    async def update_persona_folder(
+        self,
+        folder_id: str,
+        name: str | None = None,
+        parent_id: T.Any = None,
+        description: T.Any = None,
+        sort_order: int | None = None,
+    ) -> PersonaFolder | None:
+        """Update a persona folder."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_persona_folder(self, folder_id: str) -> None:
+        """Delete a persona folder by its folder_id."""
+        ...
+
+    @abc.abstractmethod
+    async def move_persona_to_folder(
+        self, persona_id: str, folder_id: str | None
+    ) -> Persona | None:
+        """Move a persona to a folder (or root if folder_id is None)."""
+        ...
+
+    @abc.abstractmethod
+    async def get_personas_by_folder(
+        self, folder_id: str | None = None
+    ) -> list[Persona]:
+        """Get all personas in a specific folder."""
+        ...
+
+    @abc.abstractmethod
+    async def batch_update_sort_order(
+        self,
+        items: list[dict],
+    ) -> None:
+        """Batch update sort_order for personas and/or folders.
+
+        Args:
+            items: List of dicts with keys:
+                - id: The persona_id or folder_id
+                - type: Either "persona" or "folder"
+                - sort_order: The new sort_order value
+        """
         ...
 
     @abc.abstractmethod
@@ -416,6 +590,65 @@ class BaseDatabase(abc.ABC):
         ...
 
     # ====
+    # Cron Job Management
+    # ====
+
+    @abc.abstractmethod
+    async def create_cron_job(
+        self,
+        name: str,
+        job_type: str,
+        cron_expression: str | None,
+        *,
+        timezone: str | None = None,
+        payload: dict | None = None,
+        description: str | None = None,
+        enabled: bool = True,
+        persistent: bool = True,
+        run_once: bool = False,
+        status: str | None = None,
+        job_id: str | None = None,
+    ) -> CronJob:
+        """Create and persist a cron job definition."""
+        ...
+
+    @abc.abstractmethod
+    async def update_cron_job(
+        self,
+        job_id: str,
+        *,
+        name: str | None = None,
+        cron_expression: str | None = None,
+        timezone: str | None = None,
+        payload: dict | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+        persistent: bool | None = None,
+        run_once: bool | None = None,
+        status: str | None = None,
+        next_run_time: datetime.datetime | None = None,
+        last_run_at: datetime.datetime | None = None,
+        last_error: str | None = None,
+    ) -> CronJob | None:
+        """Update fields of a cron job by job_id."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_cron_job(self, job_id: str) -> None:
+        """Delete a cron job by its public job_id."""
+        ...
+
+    @abc.abstractmethod
+    async def get_cron_job(self, job_id: str) -> CronJob | None:
+        """Fetch a cron job by job_id."""
+        ...
+
+    @abc.abstractmethod
+    async def list_cron_jobs(self, job_type: str | None = None) -> list[CronJob]:
+        """List cron jobs, optionally filtered by job_type."""
+        ...
+
+    # ====
     # Platform Session Management
     # ====
 
@@ -439,14 +672,40 @@ class BaseDatabase(abc.ABC):
         ...
 
     @abc.abstractmethod
+    async def get_platform_sessions_by_ids(
+        self, session_ids: list[str]
+    ) -> list[PlatformSession]:
+        """Get platform sessions by IDs."""
+        ...
+
+    @abc.abstractmethod
     async def get_platform_sessions_by_creator(
         self,
         creator: str,
         platform_id: str | None = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> list[PlatformSession]:
-        """Get all Platform sessions for a specific creator (username) and optionally platform."""
+    ) -> list[dict]:
+        """Get all Platform sessions for a specific creator (username) and optionally platform.
+
+        Returns a list of dicts containing session info and project info (if session belongs to a project).
+        """
+        ...
+
+    @abc.abstractmethod
+    async def get_platform_sessions_by_creator_paginated(
+        self,
+        creator: str,
+        platform_id: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+        exclude_project_sessions: bool = False,
+    ) -> tuple[list[dict], int]:
+        """Get paginated platform sessions and total count for a creator.
+
+        Returns:
+            tuple[list[dict], int]: (sessions_with_project_info, total_count)
+        """
         ...
 
     @abc.abstractmethod
@@ -461,4 +720,81 @@ class BaseDatabase(abc.ABC):
     @abc.abstractmethod
     async def delete_platform_session(self, session_id: str) -> None:
         """Delete a Platform session by its ID."""
+        ...
+
+    # ====
+    # ChatUI Project Management
+    # ====
+
+    @abc.abstractmethod
+    async def create_chatui_project(
+        self,
+        creator: str,
+        title: str,
+        emoji: str | None = "📁",
+        description: str | None = None,
+    ) -> ChatUIProject:
+        """Create a new ChatUI project."""
+        ...
+
+    @abc.abstractmethod
+    async def get_chatui_project_by_id(self, project_id: str) -> ChatUIProject | None:
+        """Get a ChatUI project by its ID."""
+        ...
+
+    @abc.abstractmethod
+    async def get_chatui_projects_by_creator(
+        self,
+        creator: str,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> list[ChatUIProject]:
+        """Get all ChatUI projects for a specific creator."""
+        ...
+
+    @abc.abstractmethod
+    async def update_chatui_project(
+        self,
+        project_id: str,
+        title: str | None = None,
+        emoji: str | None = None,
+        description: str | None = None,
+    ) -> None:
+        """Update a ChatUI project."""
+        ...
+
+    @abc.abstractmethod
+    async def delete_chatui_project(self, project_id: str) -> None:
+        """Delete a ChatUI project by its ID."""
+        ...
+
+    @abc.abstractmethod
+    async def add_session_to_project(
+        self,
+        session_id: str,
+        project_id: str,
+    ) -> SessionProjectRelation:
+        """Add a session to a project."""
+        ...
+
+    @abc.abstractmethod
+    async def remove_session_from_project(self, session_id: str) -> None:
+        """Remove a session from its project."""
+        ...
+
+    @abc.abstractmethod
+    async def get_project_sessions(
+        self,
+        project_id: str,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> list[PlatformSession]:
+        """Get all sessions in a project."""
+        ...
+
+    @abc.abstractmethod
+    async def get_project_by_session(
+        self, session_id: str, creator: str
+    ) -> ChatUIProject | None:
+        """Get the project that a session belongs to."""
         ...

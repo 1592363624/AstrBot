@@ -1,18 +1,25 @@
+import { EXTENSION_ROUTE_NAME } from './routeConstants.mjs';
+
 const MainRoutes = {
   path: '/main',
   meta: {
     requiresAuth: true
   },
-  redirect: '/main/platforms',
+  redirect: '/welcome',
   component: () => import('@/layouts/full/FullLayout.vue'),
   children: [
     {
       name: 'MainPage',
       path: '/',
-      component: () => import('@/views/PlatformPage.vue')
+      component: () => import('@/views/WelcomePage.vue')
     },
     {
-      name: 'Extensions',
+      name: 'Welcome',
+      path: '/welcome',
+      component: () => import('@/views/WelcomePage.vue')
+    },
+    {
+      name: EXTENSION_ROUTE_NAME,
       path: '/extension',
       component: () => import('@/views/ExtensionPage.vue')
     },
@@ -37,9 +44,17 @@ const MainRoutes = {
       component: () => import('@/views/ConfigPage.vue')
     },
     {
-      name: 'Default',
+      path: '/normal',
+      redirect: '/config#normal'
+    },
+    {
+      path: '/system',
+      redirect: '/config#system'
+    },
+    {
+      name: 'Stats',
       path: '/dashboard/default',
-      component: () => import('@/views/dashboards/default/DefaultDashboard.vue')
+      component: () => import('@/views/stats/StatsPage.vue')
     },
     {
       name: 'Conversation',
@@ -57,9 +72,24 @@ const MainRoutes = {
       component: () => import('@/views/PersonaPage.vue')
     },
     {
+      name: 'SubAgent',
+      path: '/subagent',
+      component: () => import('@/views/SubAgentPage.vue')
+    },
+    {
+      name: 'CronJobs',
+      path: '/cron',
+      component: () => import('@/views/CronJobPage.vue')
+    },
+    {
       name: 'Console',
       path: '/console',
       component: () => import('@/views/ConsolePage.vue')
+    },
+    {
+      name: 'Trace',
+      path: '/trace',
+      component: () => import('@/views/TracePage.vue')
     },
     {
       name: 'NativeKnowledgeBase',

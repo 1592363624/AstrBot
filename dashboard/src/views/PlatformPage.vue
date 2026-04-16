@@ -4,7 +4,7 @@
       <v-row class="d-flex justify-space-between align-center px-4 py-3 pb-8">
         <div>
           <h1 class="text-h1 font-weight-bold mb-2 d-flex align-center">
-            <v-icon color="black" class="me-2">mdi-robot</v-icon>{{ tm('title') }}
+            <v-icon class="me-2">mdi-robot</v-icon>{{ tm('title') }}
           </h1>
           <p class="text-subtitle-1 text-medium-emphasis mb-4">
             {{ tm('subtitle') }}
@@ -55,6 +55,21 @@
                   >
                     <v-icon size="small" start>mdi-bug</v-icon>
                     {{ getPlatformStat(item.id)?.error_count }} {{ tm('runtimeStatus.errors') }}
+                  </v-chip>
+                </div>
+                <div
+                  class="platform-qr-chip"
+                  v-if="hasQrPayload(item.id)"
+                >
+                  <v-chip
+                    size="small"
+                    color="primary"
+                    variant="tonal"
+                    class="platform-qr-chip-item"
+                    @click.stop="openPlatformQrDialog(item.id)"
+                  >
+                    <v-icon size="small" start>mdi-qrcode</v-icon>
+                    {{ tm('platformQr.show') }}
                   </v-chip>
                 </div>
                 <div v-if="getPlatformStat(item.id)?.unified_webhook && item.webhook_uuid" class="webhook-info">
@@ -138,6 +153,30 @@
       </v-card>
     </v-dialog>
 
+    <v-dialog v-model="showQrDialog" max-width="480">
+      <v-card>
+        <v-card-title class="d-flex align-center pa-4">
+          <v-icon class="me-2">mdi-qrcode</v-icon>
+          {{ tm('platformQr.title') }}
+        </v-card-title>
+        <v-card-text class="px-4 pb-4">
+          <div class="platform-qr-status">
+            {{ tm('platformQr.status') }}: {{ getPlatformQrLoginStat(currentQrPlatformId)?.qr_status || tm('platformQr.waiting') }}
+          </div>
+          <QrCodeViewer
+            :value="(getPlatformQrLoginStat(currentQrPlatformId)?.qrcode_img_content || getPlatformQrLoginStat(currentQrPlatformId)?.qrcode || '')"
+            :alt="tm('platformQr.title')"
+          />
+        </v-card-text>
+        <v-card-actions class="pa-4 pt-0">
+          <v-spacer></v-spacer>
+          <v-btn variant="tonal" color="primary" @click="showQrDialog = false">
+            {{ tm('platformQr.close') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- 错误详情对话框 -->
     <v-dialog v-model="showErrorDialog" max-width="700">
       <v-card>
@@ -194,9 +233,14 @@ import WaitingForRestart from '@/components/shared/WaitingForRestart.vue';
 import ConsoleDisplayer from '@/components/shared/ConsoleDisplayer.vue';
 import ItemCard from '@/components/shared/ItemCard.vue';
 import AddNewPlatform from '@/components/platform/AddNewPlatform.vue';
+import QrCodeViewer from '@/components/shared/QrCodeViewer.vue';
 import { useCommonStore } from '@/stores/common';
-import { useI18n, useModuleI18n } from '@/i18n/composables';
-import { getPlatformIcon, getTutorialLink } from '@/utils/platformUtils';
+import { useI18n, useModuleI18n, mergeDynamicTranslations } from '@/i18n/composables';
+import { getPlatformIcon } from '@/utils/platformUtils';
+import {
+  askForConfirmation as askForConfirmationDialog,
+  useConfirmDialog
+} from '@/utils/confirmDialog';
 
 export default {
   name: 'PlatformPage',
@@ -205,15 +249,18 @@ export default {
     WaitingForRestart,
     ConsoleDisplayer,
     ItemCard,
-    AddNewPlatform
+    AddNewPlatform,
+    QrCodeViewer,
   },
   setup() {
     const { t } = useI18n();
     const { tm } = useModuleI18n('features/platform');
+    const confirmDialog = useConfirmDialog();
 
     return {
       t,
-      tm
+      tm,
+      confirmDialog
     };
   },
   data() {
@@ -230,7 +277,7 @@ export default {
       save_message: "",
       save_message_success: "success",
 
-      showConsole: false,
+      showConsole: localStorage.getItem('platformPage_showConsole') === 'true',
 
       showWebhookDialog: false,
       currentWebhookUuid: '',
@@ -242,12 +289,18 @@ export default {
       // 错误详情对话框
       showErrorDialog: false,
       currentErrorPlatform: null,
+      showQrDialog: false,
+      currentQrPlatformId: "",
 
       store: useCommonStore()
     }
   },
 
   watch: {
+    showConsole(newValue) {
+      localStorage.setItem('platformPage_showConsole', newValue.toString());
+    },
+
     showIdConflictDialog(newValue) {
       if (!newValue && this.idConflictResolve) {
         this.idConflictResolve(false);
@@ -266,19 +319,29 @@ export default {
   mounted() {
     this.getConfig();
     this.getPlatformStats();
-    // 每 10 秒刷新一次平台状态
+    // 每 5 秒刷新一次平台状态
     this.statsRefreshInterval = setInterval(() => {
       this.getPlatformStats();
-    }, 10000);
+    }, 5000);
+    
+    // 监听语言切换事件，重新加载配置以获取插件的 i18n 数据
+    window.addEventListener('astrbot-locale-changed', this.handleLocaleChange);
   },
 
   beforeUnmount() {
     if (this.statsRefreshInterval) {
       clearInterval(this.statsRefreshInterval);
     }
+    // 移除语言切换事件监听器
+    window.removeEventListener('astrbot-locale-changed', this.handleLocaleChange);
   },
 
   methods: {
+    // 处理语言切换事件，重新加载配置以获取插件的 i18n 数据
+    handleLocaleChange() {
+      this.getConfig();
+    },
+
     // 从工具函数导入
     getPlatformIcon(platform_id) {
       // 首先检查是否有来自插件的 logo_token
@@ -295,13 +358,19 @@ export default {
         this.config_data = res.data.data.config;
         this.fetched = true
         this.metadata = res.data.data.metadata;
+
+        // 将插件平台适配器的 i18n 翻译注入到前端 i18n 系统中
+        const platformI18n = res.data.data.platform_i18n_translations;
+        if (platformI18n && typeof platformI18n === 'object') {
+          mergeDynamicTranslations('features.config-metadata', platformI18n);
+        }
       }).catch((err) => {
         this.showError(err);
       });
     },
 
-    getPlatformStats() {
-      axios.get('/api/platform/stats').then((res) => {
+    async getPlatformStats() {
+      await axios.get('/api/platform/stats').then((res) => {
         if (res.data.status === 'ok') {
           // 将数组转换为以 id 为 key 的对象，方便查找
           const stats = {};
@@ -317,6 +386,31 @@ export default {
 
     getPlatformStat(platformId) {
       return this.platformStats[platformId] || null;
+    },
+
+    hasQrPayload(platformId) {
+      const stat = this.getPlatformQrLoginStat(platformId);
+      return Boolean(stat?.qrcode_img_content || stat?.qrcode);
+    },
+
+    getPlatformQrLoginStat(platformId) {
+      const stat = this.getPlatformStat(platformId);
+      if (stat?.weixin_oc) {
+        return stat.weixin_oc;
+      }
+      if (stat && typeof stat === "object") {
+        for (const value of Object.values(stat)) {
+          if (value && typeof value === "object" && ("qrcode_img_content" in value || "qrcode" in value)) {
+            return value;
+          }
+        }
+      }
+      return null;
+    },
+
+    openPlatformQrDialog(platformId) {
+      this.currentQrPlatformId = platformId;
+      this.showQrDialog = true;
     },
 
     getStatusColor(status) {
@@ -347,8 +441,99 @@ export default {
       }
     },
 
+    findPlatformTemplate(platform) {
+      const templates = this.metadata?.platform_group?.metadata?.platform?.config_template || {};
+
+      if (platform?.type && templates[platform.type]) {
+        return templates[platform.type];
+      }
+      if (platform?.id && templates[platform.id]) {
+        return templates[platform.id];
+      }
+
+      for (const template of Object.values(templates)) {
+        if (template?.type === platform?.type) {
+          return template;
+        }
+      }
+      return null;
+    },
+
+    mergeConfigWithTemplate(sourceConfig, templateConfig) {
+      const merge = (source, reference) => {
+        const target = {};
+        const sourceObj = source && typeof source === 'object' && !Array.isArray(source) ? source : {};
+        const referenceObj = reference && typeof reference === 'object' && !Array.isArray(reference) ? reference : null;
+
+        if (!referenceObj) {
+          for (const [key, value] of Object.entries(sourceObj)) {
+            if (Array.isArray(value)) {
+              target[key] = [...value];
+            } else if (value && typeof value === 'object') {
+              target[key] = { ...value };
+            } else {
+              target[key] = value;
+            }
+          }
+          return target;
+        }
+
+        // 1) 先按模板顺序写入，保证字段相对顺序与 template 一致
+        for (const [key, refValue] of Object.entries(referenceObj)) {
+          const hasSourceKey = Object.prototype.hasOwnProperty.call(sourceObj, key);
+          const sourceValue = sourceObj[key];
+
+          if (refValue && typeof refValue === 'object' && !Array.isArray(refValue)) {
+            target[key] = merge(
+              hasSourceKey && sourceValue && typeof sourceValue === 'object' && !Array.isArray(sourceValue)
+                ? sourceValue
+                : {},
+              refValue
+            );
+            continue;
+          }
+
+          if (hasSourceKey) {
+            if (Array.isArray(sourceValue)) {
+              target[key] = [...sourceValue];
+            } else if (sourceValue && typeof sourceValue === 'object') {
+              target[key] = { ...sourceValue };
+            } else {
+              target[key] = sourceValue;
+            }
+          } else if (Array.isArray(refValue)) {
+            target[key] = [...refValue];
+          } else {
+            target[key] = refValue;
+          }
+        }
+
+        // 2) 再补充 source 中模板没有的额外字段，保持旧配置兼容性
+        for (const [key, value] of Object.entries(sourceObj)) {
+          if (Object.prototype.hasOwnProperty.call(referenceObj, key)) {
+            continue;
+          }
+          if (Array.isArray(value)) {
+            target[key] = [...value];
+          } else if (value && typeof value === 'object') {
+            target[key] = { ...value };
+          } else {
+            target[key] = value;
+          }
+        }
+
+        return target;
+      };
+
+      return merge(sourceConfig, templateConfig);
+    },
+
     editPlatform(platform) {
-      this.updatingPlatformConfig = JSON.parse(JSON.stringify(platform));
+      const platformCopy = JSON.parse(JSON.stringify(platform));
+      const template = this.findPlatformTemplate(platformCopy);
+      this.updatingPlatformConfig = template
+        ? this.mergeConfigWithTemplate(platformCopy, template)
+        : platformCopy;
       this.updatingMode = true;
       this.showAddPlatformDialog = true;
       this.$nextTick(() => {
@@ -356,15 +541,18 @@ export default {
       });
     },
 
-    deletePlatform(platform) {
-      if (confirm(`${this.messages.deleteConfirm} ${platform.id}?`)) {
-        axios.post('/api/config/platform/delete', { id: platform.id }).then((res) => {
-          this.getConfig();
-          this.showSuccess(res.data.message || this.messages.deleteSuccess);
-        }).catch((err) => {
-          this.showError(err.response?.data?.message || err.message);
-        });
+    async deletePlatform(platform) {
+      const message = `${this.messages.deleteConfirm} ${platform.id}?`;
+      if (!(await askForConfirmationDialog(message, this.confirmDialog))) {
+        return;
       }
+
+      axios.post('/api/config/platform/delete', { id: platform.id }).then((res) => {
+        this.getConfig();
+        this.showSuccess(res.data.message || this.messages.deleteSuccess);
+      }).catch((err) => {
+        this.showError(err.response?.data?.message || err.message);
+      });
     },
 
     platformStatusChange(platform) {
@@ -497,5 +685,15 @@ export default {
   word-break: break-word;
   max-height: 300px;
   overflow-y: auto;
+}
+
+.platform-qr-chip {
+  margin-top: 4px;
+}
+
+.platform-qr-status {
+  font-size: 13px;
+  margin-bottom: 10px;
+  color: rgba(0, 0, 0, 0.7);
 }
 </style>

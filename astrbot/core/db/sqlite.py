@@ -4,21 +4,27 @@ import typing as T
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import CursorResult
+from sqlalchemy import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, delete, desc, func, or_, select, text, update
 
 from astrbot.core.db import BaseDatabase
 from astrbot.core.db.po import (
+    ApiKey,
     Attachment,
+    ChatUIProject,
     CommandConfig,
     CommandConflict,
     ConversationV2,
+    CronJob,
     Persona,
+    PersonaFolder,
     PlatformMessageHistory,
     PlatformSession,
     PlatformStat,
     Preference,
+    ProviderStat,
+    SessionProjectRelation,
     SQLModel,
 )
 from astrbot.core.db.po import (
@@ -27,9 +33,10 @@ from astrbot.core.db.po import (
 from astrbot.core.db.po import (
     Stats as DeprecatedStats,
 )
+from astrbot.core.sentinels import NOT_GIVEN
 
-NOT_GIVEN = T.TypeVar("NOT_GIVEN")
 TxResult = T.TypeVar("TxResult")
+CRON_FIELD_NOT_SET = object()
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -49,7 +56,53 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute(text("PRAGMA temp_store=MEMORY"))
             await conn.execute(text("PRAGMA mmap_size=134217728"))
             await conn.execute(text("PRAGMA optimize"))
+            # 确保 personas 表有 folder_id、sort_order、skills 列（前向兼容）
+            await self._ensure_persona_folder_columns(conn)
+            await self._ensure_persona_skills_column(conn)
+            await self._ensure_persona_custom_error_message_column(conn)
             await conn.commit()
+
+    async def _ensure_persona_folder_columns(self, conn) -> None:
+        """确保 personas 表有 folder_id 和 sort_order 列。
+
+        这是为了支持旧版数据库的平滑升级。新版数据库通过 SQLModel
+        的 metadata.create_all 自动创建这些列。
+        """
+        result = await conn.execute(text("PRAGMA table_info(personas)"))
+        columns = {row[1] for row in result.fetchall()}
+
+        if "folder_id" not in columns:
+            await conn.execute(
+                text(
+                    "ALTER TABLE personas ADD COLUMN folder_id VARCHAR(36) DEFAULT NULL"
+                )
+            )
+        if "sort_order" not in columns:
+            await conn.execute(
+                text("ALTER TABLE personas ADD COLUMN sort_order INTEGER DEFAULT 0")
+            )
+
+    async def _ensure_persona_skills_column(self, conn) -> None:
+        """确保 personas 表有 skills 列。
+
+        这是为了支持旧版数据库的平滑升级。新版数据库通过 SQLModel
+        的 metadata.create_all 自动创建这些列。
+        """
+        result = await conn.execute(text("PRAGMA table_info(personas)"))
+        columns = {row[1] for row in result.fetchall()}
+
+        if "skills" not in columns:
+            await conn.execute(text("ALTER TABLE personas ADD COLUMN skills JSON"))
+
+    async def _ensure_persona_custom_error_message_column(self, conn) -> None:
+        """确保 personas 表有 custom_error_message 列。"""
+        result = await conn.execute(text("PRAGMA table_info(personas)"))
+        columns = {row[1] for row in result.fetchall()}
+
+        if "custom_error_message" not in columns:
+            await conn.execute(
+                text("ALTER TABLE personas ADD COLUMN custom_error_message TEXT")
+            )
 
     # ====
     # Platform Statistics
@@ -116,6 +169,51 @@ class SQLiteDatabase(BaseDatabase):
                 {"start_time": start_time},
             )
             return list(result.scalars().all())
+
+    async def insert_provider_stat(
+        self,
+        *,
+        umo: str,
+        provider_id: str,
+        provider_model: str | None = None,
+        conversation_id: str | None = None,
+        status: str = "completed",
+        stats: dict | None = None,
+        agent_type: str = "internal",
+    ) -> ProviderStat:
+        """Insert a provider stat record for a single agent response."""
+        stats = stats or {}
+        token_usage = stats.get("token_usage", {})
+
+        token_input_other = int(token_usage.get("input_other", 0) or 0)
+        token_input_cached = int(token_usage.get("input_cached", 0) or 0)
+        token_output = int(token_usage.get("output", 0) or 0)
+
+        start_time = float(stats.get("start_time", 0.0) or 0.0)
+        end_time = float(stats.get("end_time", 0.0) or 0.0)
+        time_to_first_token = float(stats.get("time_to_first_token", 0.0) or 0.0)
+
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                record = ProviderStat(
+                    agent_type=agent_type,
+                    status=status,
+                    umo=umo,
+                    conversation_id=conversation_id,
+                    provider_id=provider_id,
+                    provider_model=provider_model,
+                    token_input_other=token_input_other,
+                    token_input_cached=token_input_cached,
+                    token_output=token_output,
+                    start_time=start_time,
+                    end_time=end_time,
+                    time_to_first_token=time_to_first_token,
+                )
+                session.add(record)
+                await session.flush()
+                await session.refresh(record)
+                return record
 
     # ====
     # Conversation Management
@@ -241,7 +339,9 @@ class SQLiteDatabase(BaseDatabase):
                 session.add(new_conversation)
                 return new_conversation
 
-    async def update_conversation(self, cid, title=None, persona_id=None, content=None):
+    async def update_conversation(
+        self, cid, title=None, persona_id=None, content=None, token_usage=None
+    ):
         async with self.get_db() as session:
             session: AsyncSession
             async with session.begin():
@@ -255,13 +355,15 @@ class SQLiteDatabase(BaseDatabase):
                     values["persona_id"] = persona_id
                 if content is not None:
                     values["content"] = content
+                if token_usage is not None:
+                    values["token_usage"] = token_usage
                 if not values:
                     return None
                 query = query.values(**values)
                 await session.execute(query)
         return await self.get_conversation_by_id(cid)
 
-    async def delete_conversation(self, cid):
+    async def delete_conversation(self, cid) -> None:
         async with self.get_db() as session:
             session: AsyncSession
             async with session.begin():
@@ -417,7 +519,7 @@ class SQLiteDatabase(BaseDatabase):
         platform_id,
         user_id,
         offset_sec=86400,
-    ):
+    ) -> None:
         """Delete platform message history records newer than the specified offset."""
         async with self.get_db() as session:
             session: AsyncSession
@@ -529,12 +631,110 @@ class SQLiteDatabase(BaseDatabase):
                 result = T.cast(CursorResult, await session.execute(query))
                 return result.rowcount
 
+    async def create_api_key(
+        self,
+        name: str,
+        key_hash: str,
+        key_prefix: str,
+        scopes: list[str] | None,
+        created_by: str,
+        expires_at: datetime | None = None,
+    ) -> ApiKey:
+        """Create a new API key record."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                api_key = ApiKey(
+                    name=name,
+                    key_hash=key_hash,
+                    key_prefix=key_prefix,
+                    scopes=scopes,
+                    created_by=created_by,
+                    expires_at=expires_at,
+                )
+                session.add(api_key)
+                await session.flush()
+                await session.refresh(api_key)
+                return api_key
+
+    async def list_api_keys(self) -> list[ApiKey]:
+        """List all API keys."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            result = await session.execute(
+                select(ApiKey).order_by(desc(ApiKey.created_at))
+            )
+            return list(result.scalars().all())
+
+    async def get_api_key_by_id(self, key_id: str) -> ApiKey | None:
+        """Get an API key by key_id."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            result = await session.execute(
+                select(ApiKey).where(ApiKey.key_id == key_id)
+            )
+            return result.scalar_one_or_none()
+
+    async def get_active_api_key_by_hash(self, key_hash: str) -> ApiKey | None:
+        """Get an active API key by hash (not revoked, not expired)."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            now = datetime.now(timezone.utc)
+            query = select(ApiKey).where(
+                ApiKey.key_hash == key_hash,
+                col(ApiKey.revoked_at).is_(None),
+                or_(col(ApiKey.expires_at).is_(None), col(ApiKey.expires_at) > now),
+            )
+            result = await session.execute(query)
+            return result.scalar_one_or_none()
+
+    async def touch_api_key(self, key_id: str) -> None:
+        """Update last_used_at of an API key."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                await session.execute(
+                    update(ApiKey)
+                    .where(col(ApiKey.key_id) == key_id)
+                    .values(last_used_at=datetime.now(timezone.utc)),
+                )
+
+    async def revoke_api_key(self, key_id: str) -> bool:
+        """Revoke an API key."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                query = (
+                    update(ApiKey)
+                    .where(col(ApiKey.key_id) == key_id)
+                    .values(revoked_at=datetime.now(timezone.utc))
+                )
+                result = T.cast(CursorResult, await session.execute(query))
+                return result.rowcount > 0
+
+    async def delete_api_key(self, key_id: str) -> bool:
+        """Delete an API key."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                result = T.cast(
+                    CursorResult,
+                    await session.execute(
+                        delete(ApiKey).where(col(ApiKey.key_id) == key_id)
+                    ),
+                )
+                return result.rowcount > 0
+
     async def insert_persona(
         self,
         persona_id,
         system_prompt,
         begin_dialogs=None,
         tools=None,
+        skills=None,
+        custom_error_message=None,
+        folder_id=None,
+        sort_order=0,
     ):
         """Insert a new persona record."""
         async with self.get_db() as session:
@@ -545,8 +745,14 @@ class SQLiteDatabase(BaseDatabase):
                     system_prompt=system_prompt,
                     begin_dialogs=begin_dialogs or [],
                     tools=tools,
+                    skills=skills,
+                    custom_error_message=custom_error_message,
+                    folder_id=folder_id,
+                    sort_order=sort_order,
                 )
                 session.add(new_persona)
+                await session.flush()
+                await session.refresh(new_persona)
                 return new_persona
 
     async def get_persona_by_id(self, persona_id):
@@ -571,6 +777,8 @@ class SQLiteDatabase(BaseDatabase):
         system_prompt=None,
         begin_dialogs=None,
         tools=NOT_GIVEN,
+        skills=NOT_GIVEN,
+        custom_error_message=NOT_GIVEN,
     ):
         """Update a persona's system prompt or begin dialogs."""
         async with self.get_db() as session:
@@ -584,13 +792,17 @@ class SQLiteDatabase(BaseDatabase):
                     values["begin_dialogs"] = begin_dialogs
                 if tools is not NOT_GIVEN:
                     values["tools"] = tools
+                if skills is not NOT_GIVEN:
+                    values["skills"] = skills
+                if custom_error_message is not NOT_GIVEN:
+                    values["custom_error_message"] = custom_error_message
                 if not values:
                     return None
                 query = query.values(**values)
                 await session.execute(query)
         return await self.get_persona_by_id(persona_id)
 
-    async def delete_persona(self, persona_id):
+    async def delete_persona(self, persona_id) -> None:
         """Delete a persona by its ID."""
         async with self.get_db() as session:
             session: AsyncSession
@@ -598,6 +810,207 @@ class SQLiteDatabase(BaseDatabase):
                 await session.execute(
                     delete(Persona).where(col(Persona.persona_id) == persona_id),
                 )
+
+    # ====
+    # Persona Folder Management
+    # ====
+
+    async def insert_persona_folder(
+        self,
+        name: str,
+        parent_id: str | None = None,
+        description: str | None = None,
+        sort_order: int = 0,
+    ) -> PersonaFolder:
+        """Insert a new persona folder."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                new_folder = PersonaFolder(
+                    name=name,
+                    parent_id=parent_id,
+                    description=description,
+                    sort_order=sort_order,
+                )
+                session.add(new_folder)
+                await session.flush()
+                await session.refresh(new_folder)
+                return new_folder
+
+    async def get_persona_folder_by_id(self, folder_id: str) -> PersonaFolder | None:
+        """Get a persona folder by its folder_id."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            query = select(PersonaFolder).where(PersonaFolder.folder_id == folder_id)
+            result = await session.execute(query)
+            return result.scalar_one_or_none()
+
+    async def get_persona_folders(
+        self, parent_id: str | None = None
+    ) -> list[PersonaFolder]:
+        """Get all persona folders, optionally filtered by parent_id.
+
+        Args:
+            parent_id: If None, returns root folders only. If specified, returns
+                       children of that folder.
+        """
+        async with self.get_db() as session:
+            session: AsyncSession
+            if parent_id is None:
+                # Get root folders (parent_id is NULL)
+                query = (
+                    select(PersonaFolder)
+                    .where(col(PersonaFolder.parent_id).is_(None))
+                    .order_by(col(PersonaFolder.sort_order), col(PersonaFolder.name))
+                )
+            else:
+                query = (
+                    select(PersonaFolder)
+                    .where(PersonaFolder.parent_id == parent_id)
+                    .order_by(col(PersonaFolder.sort_order), col(PersonaFolder.name))
+                )
+            result = await session.execute(query)
+            return list(result.scalars().all())
+
+    async def get_all_persona_folders(self) -> list[PersonaFolder]:
+        """Get all persona folders."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            query = select(PersonaFolder).order_by(
+                col(PersonaFolder.sort_order), col(PersonaFolder.name)
+            )
+            result = await session.execute(query)
+            return list(result.scalars().all())
+
+    async def update_persona_folder(
+        self,
+        folder_id: str,
+        name: str | None = None,
+        parent_id: T.Any = NOT_GIVEN,
+        description: T.Any = NOT_GIVEN,
+        sort_order: int | None = None,
+    ) -> PersonaFolder | None:
+        """Update a persona folder."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                query = update(PersonaFolder).where(
+                    col(PersonaFolder.folder_id) == folder_id
+                )
+                values: dict[str, T.Any] = {}
+                if name is not None:
+                    values["name"] = name
+                if parent_id is not NOT_GIVEN:
+                    values["parent_id"] = parent_id
+                if description is not NOT_GIVEN:
+                    values["description"] = description
+                if sort_order is not None:
+                    values["sort_order"] = sort_order
+                if not values:
+                    return None
+                query = query.values(**values)
+                await session.execute(query)
+        return await self.get_persona_folder_by_id(folder_id)
+
+    async def delete_persona_folder(self, folder_id: str) -> None:
+        """Delete a persona folder by its folder_id.
+
+        Note: This will also set folder_id to NULL for all personas in this folder,
+        moving them to the root directory.
+        """
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                # Move personas to root directory
+                await session.execute(
+                    update(Persona)
+                    .where(col(Persona.folder_id) == folder_id)
+                    .values(folder_id=None)
+                )
+                # Delete the folder
+                await session.execute(
+                    delete(PersonaFolder).where(
+                        col(PersonaFolder.folder_id) == folder_id
+                    ),
+                )
+
+    async def move_persona_to_folder(
+        self, persona_id: str, folder_id: str | None
+    ) -> Persona | None:
+        """Move a persona to a folder (or root if folder_id is None)."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                await session.execute(
+                    update(Persona)
+                    .where(col(Persona.persona_id) == persona_id)
+                    .values(folder_id=folder_id)
+                )
+        return await self.get_persona_by_id(persona_id)
+
+    async def get_personas_by_folder(
+        self, folder_id: str | None = None
+    ) -> list[Persona]:
+        """Get all personas in a specific folder.
+
+        Args:
+            folder_id: If None, returns personas in root directory.
+        """
+        async with self.get_db() as session:
+            session: AsyncSession
+            if folder_id is None:
+                query = (
+                    select(Persona)
+                    .where(col(Persona.folder_id).is_(None))
+                    .order_by(col(Persona.sort_order), col(Persona.persona_id))
+                )
+            else:
+                query = (
+                    select(Persona)
+                    .where(Persona.folder_id == folder_id)
+                    .order_by(col(Persona.sort_order), col(Persona.persona_id))
+                )
+            result = await session.execute(query)
+            return list(result.scalars().all())
+
+    async def batch_update_sort_order(
+        self,
+        items: list[dict],
+    ) -> None:
+        """Batch update sort_order for personas and/or folders.
+
+        Args:
+            items: List of dicts with keys:
+                - id: The persona_id or folder_id
+                - type: Either "persona" or "folder"
+                - sort_order: The new sort_order value
+        """
+        if not items:
+            return
+
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                for item in items:
+                    item_id = item.get("id")
+                    item_type = item.get("type")
+                    sort_order = item.get("sort_order")
+
+                    if item_id is None or item_type is None or sort_order is None:
+                        continue
+
+                    if item_type == "persona":
+                        await session.execute(
+                            update(Persona)
+                            .where(col(Persona.persona_id) == item_id)
+                            .values(sort_order=sort_order)
+                        )
+                    elif item_type == "folder":
+                        await session.execute(
+                            update(PersonaFolder)
+                            .where(col(PersonaFolder.folder_id) == item_id)
+                            .values(sort_order=sort_order)
+                        )
 
     async def insert_preference_or_update(self, scope, scope_id, key, value):
         """Insert a new preference record or update if it exists."""
@@ -647,7 +1060,7 @@ class SQLiteDatabase(BaseDatabase):
             result = await session.execute(query)
             return result.scalars().all()
 
-    async def remove_preference(self, scope, scope_id, key):
+    async def remove_preference(self, scope, scope_id, key) -> None:
         """Remove a preference by scope ID and key."""
         async with self.get_db() as session:
             session: AsyncSession
@@ -661,7 +1074,7 @@ class SQLiteDatabase(BaseDatabase):
                 )
             await session.commit()
 
-    async def clear_preferences(self, scope, scope_id):
+    async def clear_preferences(self, scope, scope_id) -> None:
         """Clear all preferences for a specific scope ID."""
         async with self.get_db() as session:
             session: AsyncSession
@@ -939,7 +1352,7 @@ class SQLiteDatabase(BaseDatabase):
 
         result = None
 
-        def runner():
+        def runner() -> None:
             nonlocal result
             result = asyncio.run(_inner())
 
@@ -962,7 +1375,7 @@ class SQLiteDatabase(BaseDatabase):
 
         result = None
 
-        def runner():
+        def runner() -> None:
             nonlocal result
             result = asyncio.run(_inner())
 
@@ -997,7 +1410,7 @@ class SQLiteDatabase(BaseDatabase):
 
         result = None
 
-        def runner():
+        def runner() -> None:
             nonlocal result
             result = asyncio.run(_inner())
 
@@ -1050,29 +1463,128 @@ class SQLiteDatabase(BaseDatabase):
             result = await session.execute(query)
             return result.scalar_one_or_none()
 
+    async def get_platform_sessions_by_ids(
+        self, session_ids: list[str]
+    ) -> list[PlatformSession]:
+        """Get platform sessions by IDs."""
+        if not session_ids:
+            return []
+
+        async with self.get_db() as session:
+            session: AsyncSession
+            query = select(PlatformSession).where(
+                col(PlatformSession.session_id).in_(session_ids)
+            )
+            result = await session.execute(query)
+            return list(result.scalars().all())
+
     async def get_platform_sessions_by_creator(
         self,
         creator: str,
         platform_id: str | None = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> list[PlatformSession]:
-        """Get all Platform sessions for a specific creator (username) and optionally platform."""
+    ) -> list[dict]:
+        """Get all Platform sessions for a specific creator (username) and optionally platform.
+
+        Returns a list of dicts containing session info and project info (if session belongs to a project).
+        """
+        (
+            sessions_with_projects,
+            _,
+        ) = await self.get_platform_sessions_by_creator_paginated(
+            creator=creator,
+            platform_id=platform_id,
+            page=page,
+            page_size=page_size,
+            exclude_project_sessions=False,
+        )
+        return sessions_with_projects
+
+    @staticmethod
+    def _build_platform_sessions_query(
+        creator: str,
+        platform_id: str | None = None,
+        exclude_project_sessions: bool = False,
+    ):
+        query = (
+            select(
+                PlatformSession,
+                col(ChatUIProject.project_id),
+                col(ChatUIProject.title).label("project_title"),
+                col(ChatUIProject.emoji).label("project_emoji"),
+            )
+            .outerjoin(
+                SessionProjectRelation,
+                col(PlatformSession.session_id)
+                == col(SessionProjectRelation.session_id),
+            )
+            .outerjoin(
+                ChatUIProject,
+                col(SessionProjectRelation.project_id) == col(ChatUIProject.project_id),
+            )
+            .where(col(PlatformSession.creator) == creator)
+        )
+
+        if platform_id:
+            query = query.where(PlatformSession.platform_id == platform_id)
+        if exclude_project_sessions:
+            query = query.where(col(ChatUIProject.project_id).is_(None))
+
+        return query
+
+    @staticmethod
+    def _rows_to_session_dicts(rows: T.Sequence[Row[tuple]]) -> list[dict]:
+        sessions_with_projects = []
+        for row in rows:
+            platform_session = row[0]
+            project_id = row[1]
+            project_title = row[2]
+            project_emoji = row[3]
+
+            session_dict = {
+                "session": platform_session,
+                "project_id": project_id,
+                "project_title": project_title,
+                "project_emoji": project_emoji,
+            }
+            sessions_with_projects.append(session_dict)
+
+        return sessions_with_projects
+
+    async def get_platform_sessions_by_creator_paginated(
+        self,
+        creator: str,
+        platform_id: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+        exclude_project_sessions: bool = False,
+    ) -> tuple[list[dict], int]:
+        """Get paginated Platform sessions for a creator with total count."""
         async with self.get_db() as session:
             session: AsyncSession
             offset = (page - 1) * page_size
-            query = select(PlatformSession).where(PlatformSession.creator == creator)
 
-            if platform_id:
-                query = query.where(PlatformSession.platform_id == platform_id)
+            base_query = self._build_platform_sessions_query(
+                creator=creator,
+                platform_id=platform_id,
+                exclude_project_sessions=exclude_project_sessions,
+            )
 
-            query = (
-                query.order_by(desc(PlatformSession.updated_at))
+            total_result = await session.execute(
+                select(func.count()).select_from(base_query.subquery())
+            )
+            total = int(total_result.scalar_one() or 0)
+
+            result_query = (
+                base_query.order_by(desc(PlatformSession.updated_at))
                 .offset(offset)
                 .limit(page_size)
             )
-            result = await session.execute(query)
-            return list(result.scalars().all())
+            result = await session.execute(result_query)
+
+            sessions_with_projects = self._rows_to_session_dicts(result.all())
+            return sessions_with_projects, total
 
     async def update_platform_session(
         self,
@@ -1103,3 +1615,300 @@ class SQLiteDatabase(BaseDatabase):
                         col(PlatformSession.session_id) == session_id,
                     ),
                 )
+
+    # ====
+    # ChatUI Project Management
+    # ====
+
+    async def create_chatui_project(
+        self,
+        creator: str,
+        title: str,
+        emoji: str | None = "📁",
+        description: str | None = None,
+    ) -> ChatUIProject:
+        """Create a new ChatUI project."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                project = ChatUIProject(
+                    creator=creator,
+                    title=title,
+                    emoji=emoji,
+                    description=description,
+                )
+                session.add(project)
+                await session.flush()
+                await session.refresh(project)
+                return project
+
+    async def get_chatui_project_by_id(self, project_id: str) -> ChatUIProject | None:
+        """Get a ChatUI project by its ID."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            result = await session.execute(
+                select(ChatUIProject).where(
+                    col(ChatUIProject.project_id) == project_id,
+                ),
+            )
+            return result.scalar_one_or_none()
+
+    async def get_chatui_projects_by_creator(
+        self,
+        creator: str,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> list[ChatUIProject]:
+        """Get all ChatUI projects for a specific creator."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            offset = (page - 1) * page_size
+            result = await session.execute(
+                select(ChatUIProject)
+                .where(col(ChatUIProject.creator) == creator)
+                .order_by(desc(ChatUIProject.updated_at))
+                .limit(page_size)
+                .offset(offset),
+            )
+            return list(result.scalars().all())
+
+    async def update_chatui_project(
+        self,
+        project_id: str,
+        title: str | None = None,
+        emoji: str | None = None,
+        description: str | None = None,
+    ) -> None:
+        """Update a ChatUI project."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                values: dict[str, T.Any] = {"updated_at": datetime.now(timezone.utc)}
+                if title is not None:
+                    values["title"] = title
+                if emoji is not None:
+                    values["emoji"] = emoji
+                if description is not None:
+                    values["description"] = description
+
+                await session.execute(
+                    update(ChatUIProject)
+                    .where(col(ChatUIProject.project_id) == project_id)
+                    .values(**values),
+                )
+
+    async def delete_chatui_project(self, project_id: str) -> None:
+        """Delete a ChatUI project by its ID."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                # First remove all session relations
+                await session.execute(
+                    delete(SessionProjectRelation).where(
+                        col(SessionProjectRelation.project_id) == project_id,
+                    ),
+                )
+                # Then delete the project
+                await session.execute(
+                    delete(ChatUIProject).where(
+                        col(ChatUIProject.project_id) == project_id,
+                    ),
+                )
+
+    async def add_session_to_project(
+        self,
+        session_id: str,
+        project_id: str,
+    ) -> SessionProjectRelation:
+        """Add a session to a project."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                # First remove existing relation if any
+                await session.execute(
+                    delete(SessionProjectRelation).where(
+                        col(SessionProjectRelation.session_id) == session_id,
+                    ),
+                )
+                # Then create new relation
+                relation = SessionProjectRelation(
+                    session_id=session_id,
+                    project_id=project_id,
+                )
+                session.add(relation)
+                await session.flush()
+                await session.refresh(relation)
+                return relation
+
+    async def remove_session_from_project(self, session_id: str) -> None:
+        """Remove a session from its project."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                await session.execute(
+                    delete(SessionProjectRelation).where(
+                        col(SessionProjectRelation.session_id) == session_id,
+                    ),
+                )
+
+    async def get_project_sessions(
+        self,
+        project_id: str,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> list[PlatformSession]:
+        """Get all sessions in a project."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            offset = (page - 1) * page_size
+            result = await session.execute(
+                select(PlatformSession)
+                .join(
+                    SessionProjectRelation,
+                    col(PlatformSession.session_id)
+                    == col(SessionProjectRelation.session_id),
+                )
+                .where(col(SessionProjectRelation.project_id) == project_id)
+                .order_by(desc(PlatformSession.updated_at))
+                .limit(page_size)
+                .offset(offset),
+            )
+            return list(result.scalars().all())
+
+    async def get_project_by_session(
+        self, session_id: str, creator: str
+    ) -> ChatUIProject | None:
+        """Get the project that a session belongs to."""
+        async with self.get_db() as session:
+            session: AsyncSession
+            result = await session.execute(
+                select(ChatUIProject)
+                .join(
+                    SessionProjectRelation,
+                    col(ChatUIProject.project_id)
+                    == col(SessionProjectRelation.project_id),
+                )
+                .where(
+                    col(SessionProjectRelation.session_id) == session_id,
+                    col(ChatUIProject.creator) == creator,
+                ),
+            )
+            return result.scalar_one_or_none()
+
+    # ====
+    # Cron Job Management
+    # ====
+
+    async def create_cron_job(
+        self,
+        name: str,
+        job_type: str,
+        cron_expression: str | None,
+        *,
+        timezone: str | None = None,
+        payload: dict | None = None,
+        description: str | None = None,
+        enabled: bool = True,
+        persistent: bool = True,
+        run_once: bool = False,
+        status: str | None = None,
+        job_id: str | None = None,
+    ) -> CronJob:
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                job = CronJob(
+                    name=name,
+                    job_type=job_type,
+                    cron_expression=cron_expression,
+                    timezone=timezone,
+                    payload=payload or {},
+                    description=description,
+                    enabled=enabled,
+                    persistent=persistent,
+                    run_once=run_once,
+                    status=status or "scheduled",
+                )
+                if job_id:
+                    job.job_id = job_id
+                session.add(job)
+                await session.flush()
+                await session.refresh(job)
+                return job
+
+    async def update_cron_job(
+        self,
+        job_id: str,
+        *,
+        name: str | None | object = CRON_FIELD_NOT_SET,
+        cron_expression: str | None | object = CRON_FIELD_NOT_SET,
+        timezone: str | None | object = CRON_FIELD_NOT_SET,
+        payload: dict | None | object = CRON_FIELD_NOT_SET,
+        description: str | None | object = CRON_FIELD_NOT_SET,
+        enabled: bool | None | object = CRON_FIELD_NOT_SET,
+        persistent: bool | None | object = CRON_FIELD_NOT_SET,
+        run_once: bool | None | object = CRON_FIELD_NOT_SET,
+        status: str | None | object = CRON_FIELD_NOT_SET,
+        next_run_time: datetime | None | object = CRON_FIELD_NOT_SET,
+        last_run_at: datetime | None | object = CRON_FIELD_NOT_SET,
+        last_error: str | None | object = CRON_FIELD_NOT_SET,
+    ) -> CronJob | None:
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                updates: dict = {}
+                for key, val in {
+                    "name": name,
+                    "cron_expression": cron_expression,
+                    "timezone": timezone,
+                    "payload": payload,
+                    "description": description,
+                    "enabled": enabled,
+                    "persistent": persistent,
+                    "run_once": run_once,
+                    "status": status,
+                    "next_run_time": next_run_time,
+                    "last_run_at": last_run_at,
+                    "last_error": last_error,
+                }.items():
+                    if val is CRON_FIELD_NOT_SET:
+                        continue
+                    updates[key] = val
+
+                stmt = (
+                    update(CronJob)
+                    .where(col(CronJob.job_id) == job_id)
+                    .values(**updates)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await session.execute(stmt)
+                result = await session.execute(
+                    select(CronJob).where(col(CronJob.job_id) == job_id)
+                )
+                return result.scalar_one_or_none()
+
+    async def delete_cron_job(self, job_id: str) -> None:
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                await session.execute(
+                    delete(CronJob).where(col(CronJob.job_id) == job_id)
+                )
+
+    async def get_cron_job(self, job_id: str) -> CronJob | None:
+        async with self.get_db() as session:
+            session: AsyncSession
+            result = await session.execute(
+                select(CronJob).where(col(CronJob.job_id) == job_id)
+            )
+            return result.scalar_one_or_none()
+
+    async def list_cron_jobs(self, job_type: str | None = None) -> list[CronJob]:
+        async with self.get_db() as session:
+            session: AsyncSession
+            query = select(CronJob)
+            if job_type:
+                query = query.where(col(CronJob.job_type) == job_type)
+            query = query.order_by(desc(CronJob.created_at))
+            result = await session.execute(query)
+            return list(result.scalars().all())

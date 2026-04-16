@@ -11,12 +11,13 @@ from astrbot.core import sp
 from astrbot.core.agent.message import AssistantMessageSegment, UserMessageSegment
 from astrbot.core.db import BaseDatabase
 from astrbot.core.db.po import Conversation, ConversationV2
+from astrbot.core.utils.datetime_utils import to_utc_timestamp
 
 
 class ConversationManager:
     """负责管理会话与 LLM 的对话，某个会话当前正在用哪个对话。"""
 
-    def __init__(self, db_helper: BaseDatabase):
+    def __init__(self, db_helper: BaseDatabase) -> None:
         self.session_conversations: dict[str, str] = {}
         self.db = db_helper
         self.save_interval = 60  # 每 60 秒保存一次
@@ -58,8 +59,10 @@ class ConversationManager:
 
     def _convert_conv_from_v2_to_v1(self, conv_v2: ConversationV2) -> Conversation:
         """将 ConversationV2 对象转换为 Conversation 对象"""
-        created_at = int(conv_v2.created_at.timestamp())
-        updated_at = int(conv_v2.updated_at.timestamp())
+        created_ts = to_utc_timestamp(conv_v2.created_at)
+        updated_ts = to_utc_timestamp(conv_v2.updated_at)
+        created_at = int(created_ts) if created_ts is not None else 0
+        updated_at = int(updated_ts) if updated_ts is not None else 0
         return Conversation(
             platform_id=conv_v2.platform_id,
             user_id=conv_v2.user_id,
@@ -69,6 +72,7 @@ class ConversationManager:
             persona_id=conv_v2.persona_id,
             created_at=created_at,
             updated_at=updated_at,
+            token_usage=conv_v2.token_usage,
         )
 
     async def new_conversation(
@@ -105,7 +109,9 @@ class ConversationManager:
         await sp.session_put(unified_msg_origin, "sel_conv_id", conv.conversation_id)
         return conv.conversation_id
 
-    async def switch_conversation(self, unified_msg_origin: str, conversation_id: str):
+    async def switch_conversation(
+        self, unified_msg_origin: str, conversation_id: str
+    ) -> None:
         """切换会话的对话
 
         Args:
@@ -120,7 +126,7 @@ class ConversationManager:
         self,
         unified_msg_origin: str,
         conversation_id: str | None = None,
-    ):
+    ) -> None:
         """删除会话的对话，当 conversation_id 为 None 时删除会话当前的对话
 
         Args:
@@ -137,7 +143,7 @@ class ConversationManager:
                 self.session_conversations.pop(unified_msg_origin, None)
                 await sp.session_remove(unified_msg_origin, "sel_conv_id")
 
-    async def delete_conversations_by_user_id(self, unified_msg_origin: str):
+    async def delete_conversations_by_user_id(self, unified_msg_origin: str) -> None:
         """删除会话的所有对话
 
         Args:
@@ -256,6 +262,7 @@ class ConversationManager:
         history: list[dict] | None = None,
         title: str | None = None,
         persona_id: str | None = None,
+        token_usage: int | None = None,
     ) -> None:
         """更新会话的对话.
 
@@ -263,6 +270,7 @@ class ConversationManager:
             unified_msg_origin (str): 统一的消息来源字符串。格式为 platform_name:message_type:session_id
             conversation_id (str): 对话 ID, 是 uuid 格式的字符串
             history (List[Dict]): 对话历史记录, 是一个字典列表, 每个字典包含 role 和 content 字段
+            token_usage (int | None): token 使用量。None 表示不更新
 
         """
         if not conversation_id:
@@ -274,6 +282,7 @@ class ConversationManager:
                 title=title,
                 persona_id=persona_id,
                 content=history,
+                token_usage=token_usage,
             )
 
     async def update_conversation_title(
