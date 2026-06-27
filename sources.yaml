@@ -49,3 +49,19 @@ sources:
   # QQ自动点赞
   - repo: https://github.com/1592363624/astrbot_plugin_zanwo_shell
     type: single
+
+  # QQ群智能守护者 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_group_guardian
+    type: single
+
+  # 开盒插件 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_shell_box
+    type: single
+
+  # 摸鱼修仙 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_monixiuxian
+    type: single
+
+  # 电子钓鱼小游戏 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_fishing
+    type: single
