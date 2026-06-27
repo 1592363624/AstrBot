@@ -26,6 +26,10 @@ sources:
   - repo: https://github.com/1592363624/astrbot_plugin_help
     type: single
 
+  # 基于typst实现的AstrBot插件菜单渲染，把插件菜单、事件钩子、函数工具、过滤器列表渲染成友好界面，支持指令组、搜索高亮等 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_help_typst
+    type: single
+
   # astrbot_plugin_mcmcmc (fork)
   - repo: https://github.com/1592363624/astrbot_plugin_mcmcmc
     type: single
