@@ -27,20 +27,6 @@
     "stars": 0,
     "updated_at": ""
   },
-  "Fishing Another!": {
-    "name": "Fishing Another!",
-    "desc": "全新架构钓鱼插件！更多交互，多商店系统、交易所、品质系统、水族箱和Web管理（支持原版fishing存档继续游玩）",
-    "version": "2.4.0",
-    "author": "xxlemon",
-    "repo": "https://github.com/1592363624/astrbot_plugin_fishing",
-    "display_name": "",
-    "social_link": "",
-    "tags": [],
-    "logo": "",
-    "pinned": false,
-    "stars": 0,
-    "updated_at": ""
-  },
   "GitHub监控插件": {
     "name": "GitHub监控插件",
     "desc": "定时监控GitHub仓库commit变化并发送通知",
