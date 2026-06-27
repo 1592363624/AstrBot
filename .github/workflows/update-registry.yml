@@ -41,7 +41,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python generate_registry.py --config config.yaml --sources sources.yaml
+          python generate_registry.py --config config.yaml --sources sources.yaml --generate-sources
       
       - name: Check for changes
         id: check_changes
