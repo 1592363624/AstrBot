@@ -64,5 +64,7 @@ GenieData/
 .worktrees/
 
 dashboard/bun.lock
-.github/
-!.github/update-registry.yml
+.github/*
+!.github/workflows
+.github/workflows/*
+!.github/workflows/update-registry.yml
