@@ -22,6 +22,7 @@
 import argparse
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -638,6 +639,94 @@ def save_json(data: Any, output_path: Path) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+# 变更记录分隔符
+CHANGELOG_SEPARATOR: str = "---"
+# 保留的最大变更记录数
+MAX_CHANGELOG_ENTRIES: int = 10
+
+
+def update_readme_changelog(
+    readme_path: Path,
+    added: Dict[str, Dict[str, Any]],
+    removed: Dict[str, Dict[str, Any]],
+    updated: Dict[str, Dict[str, Tuple[Any, Any]]],
+) -> None:
+    """
+    更新 README.md 变更日志，保留最新的 10 条记录。
+
+    Args:
+        readme_path: README.md 文件路径。
+        added: 新增插件字典。
+        removed: 移除插件字典。
+        updated: 更新插件字典，值为字段变更映射。
+    """
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 构建本次变更条目
+    changes: List[str] = []
+    for name, entry in added.items():
+        version = entry.get("version", "")
+        changes.append(f"  - **[新增]** `{name}` v{version}")
+    for name, entry in removed.items():
+        version = entry.get("version", "")
+        changes.append(f"  - **[移除]** `{name}` (原版本: {version})")
+    for name, fields in updated.items():
+        version_old, version_new = fields.get("version", ("", ""))
+        if version_old != version_new:
+            changes.append(f"  - **[更新]** `{name}` v{version_old} -> v{version_new}")
+        else:
+            changes.append(f"  - **[变更]** `{name}` 元数据发生更新")
+
+    if not changes:
+        return
+
+    entry_text = f"### {now}\n\n" + "\n".join(changes) + "\n"
+
+    # 读取现有 README 内容
+    if readme_path.exists():
+        content = readme_path.read_text(encoding="utf-8")
+    else:
+        content = ""
+
+    # 查找分隔线位置，将变更记录插入到分隔线后面
+    lines = content.split("\n")
+    separator_idx = -1
+    for i, line in enumerate(lines):
+        if line.strip() == CHANGELOG_SEPARATOR:
+            separator_idx = i
+            break
+
+    if separator_idx == -1:
+        header = f"# AstrBot Plugin Registry\n\n插件注册表自动更新日志，记录最近 {MAX_CHANGELOG_ENTRIES} 次变更。\n\n---\n"
+        existing_entries = ""
+    else:
+        header = "\n".join(lines[: separator_idx + 1]) + "\n"
+        existing_entries = "\n".join(lines[separator_idx + 1 :])
+
+    # 合并新旧条目
+    all_entries = entry_text + "\n" + existing_entries if existing_entries.strip() else entry_text
+
+    # 只保留最新的 MAX_CHANGELOG_ENTRIES 条记录
+    entries_list: List[str] = []
+    current_entry_lines: List[str] = []
+    for line in all_entries.split("\n"):
+        if line.startswith("### "):
+            if current_entry_lines:
+                entries_list.append("\n".join(current_entry_lines))
+            current_entry_lines = [line]
+        else:
+            current_entry_lines.append(line)
+    if current_entry_lines:
+        entries_list.append("\n".join(current_entry_lines))
+
+    entries_list = entries_list[:MAX_CHANGELOG_ENTRIES]
+    final_content = header + "\n" + "\n\n".join(entries_list) + "\n"
+
+    readme_path.parent.mkdir(parents=True, exist_ok=True)
+    readme_path.write_text(final_content, encoding="utf-8")
+    print(f"已更新 README.md 变更日志。")
+
+
 def parse_args() -> argparse.Namespace:
     """
     解析命令行参数。
@@ -838,6 +927,10 @@ def main() -> None:
                 print(f"  [更新] {name} 版本 {version_old} -> {version_new}")
             else:
                 print(f"  [变更] {name} 元数据发生更新")
+
+        # 更新 README.md 变更日志
+        readme_path = config_path.parent / "README.md"
+        update_readme_changelog(readme_path, added, removed, updated)
 
 
 if __name__ == "__main__":
