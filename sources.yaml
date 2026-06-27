@@ -1,0 +1,71 @@
+# 插件源列表配置文件
+# 由 GitHub Actions 自动生成，请勿手动编辑
+
+sources:
+  # 这是一个Steam 游戏价格监控插件。 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_SteamSaleTracker
+    type: single
+
+  # 批量撤回,指定撤回,自动撤回,防撤回,撤回,撤回,撤回
+  - repo: https://github.com/1592363624/astrbot_plugin_batchrecall
+    type: single
+
+  # 定时监控GitHub仓库commit变化并发送通知
+  - repo: https://github.com/1592363624/astrbot_plugin_github_monitor_shell
+    type: single
+
+  # 群聊入群验证插件，使用极验Geetest V4实现入群人机验证 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_group_geetest_verify
+    type: single
+
+  # [QQ群智能守护者]集28项群管功能与AI智能审核于一体的astrbot综合群管理插件。支持禁言/踢人/全体禁言/群名片/公告/群文件/精华消息/群打卡等完整群管工具集；内置智能审核系统：正则初筛+30条上下文+LLM二次判断，精准识别骂人/广告/色情/暴恐/涉枪涉爆/政治敏感/违规网址等违规内容；支持合并转发消息审核、OCR识图审核（3种内置提示词模板+自定义提示词+WebUI下拉选择视觉模型）、QQ收藏/JSON卡片自动撤回；支持外置SQLite词库，每个功能独立开关，群白名单/黑名单，管理员免检测，可指定审核专用LLM，WebUI管理面板实时监控。 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_group_guardian
+    type: single
+
+  # 查看所有命令，包括插件，返回一张帮助图片
+  - repo: https://github.com/1592363624/astrbot_plugin_help
+    type: single
+
+  # astrbot_plugin_mcmcmc (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_mcmcmc
+    type: single
+
+  # astrbot_plugin_monixiuxian (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_monixiuxian
+    type: single
+
+  # astrbot_plugin_no_wake
+  - repo: https://github.com/1592363624/astrbot_plugin_no_wake
+    type: single
+
+  # QQ群打卡插件，支持自动定时打卡、白名单模式、管理员通知等功能 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_qq_group_sign
+    type: single
+
+  # astrbot_plugin_qq_operater_shell
+  - repo: https://github.com/1592363624/astrbot_plugin_qq_operater_shell
+    type: single
+
+  # astrbot_plugin_rcon_shell
+  - repo: https://github.com/1592363624/astrbot_plugin_rcon_shell
+    type: single
+
+  # 一个通过Onebot协议接口拉取用户QQ主页信息的开盒插件 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_shell_box
+    type: single
+
+  # 自动为指定的用户回复表情消息，支持开关 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_shell_emoji_reply
+    type: single
+
+  # 监控Steam指定玩家的游戏状态变更，并实时推送至群聊。 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_steam_status_monitor_shell
+    type: single
+
+  # astrbot_plugin_xiuxian_shell
+  - repo: https://github.com/1592363624/astrbot_plugin_xiuxian_shell
+    type: single
+
+  # 自动点赞 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_zanwo_shell
+    type: single
