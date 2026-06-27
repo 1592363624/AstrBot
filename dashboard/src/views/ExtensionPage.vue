@@ -164,6 +164,9 @@ const {
   refreshPluginMarket,
   handleLocaleChange,
   searchDebounceTimer,
+  enabledSources,
+  toggleSourceEnabled,
+  isSourceEnabled,
 } = pageState;
 
 const selectedPluginId = computed(() => {
@@ -181,30 +184,16 @@ const selectedInstalledPlugin = computed(() => {
   return data.find((plugin) => plugin.name === selectedPluginId.value) || null;
 });
 
-const normalizeRepoUrl = (value) =>
-  String(value || "")
-    .trim()
-    .replace(/\/+$/, "")
-    .toLowerCase()
-    .replace(/\.git$/, "");
-
 const selectedMarketPlugin = computed(() => {
   const market = Array.isArray(pluginMarketData.value)
     ? pluginMarketData.value
     : [];
   const installedPlugin = selectedInstalledPlugin.value;
-  const marketNameMatch =
-    market.find((item) => item.name === selectedPluginId.value) || null;
-
-  if (selectedDetailTab.value === "market" || !installedPlugin) {
-    return marketNameMatch;
-  }
-
-  const repo = normalizeRepoUrl(installedPlugin.repo);
-  if (!repo) return null;
-
+  const repo = installedPlugin?.repo?.toLowerCase();
   return (
-    market.find((item) => normalizeRepoUrl(item?.repo) === repo) || null
+    market.find((item) => item.name === selectedPluginId.value) ||
+    market.find((item) => repo && item.repo?.toLowerCase() === repo) ||
+    null
   );
 });
 
@@ -971,6 +960,15 @@ const updateDialogPluginLogo = computed(() => {
             <v-list-item-title>{{
               tm("market.defaultSource")
             }}</v-list-item-title>
+            <template v-slot:append>
+              <v-switch
+                :model-value="true"
+                disabled
+                hide-details
+                density="compact"
+                class="ml-2"
+              ></v-switch>
+            </template>
           </v-list-item>
 
           <v-list-item
@@ -993,6 +991,14 @@ const updateDialogPluginLogo = computed(() => {
               source.url
             }}</v-list-item-subtitle>
             <template v-slot:append>
+              <v-switch
+                :model-value="isSourceEnabled(source.url)"
+                @update:model-value="toggleSourceEnabled(source.url)"
+                @click.stop
+                hide-details
+                density="compact"
+                class="ml-2"
+              ></v-switch>
               <v-btn
                 icon="mdi-pencil-outline"
                 size="small"

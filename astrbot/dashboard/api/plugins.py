@@ -557,6 +557,32 @@ async def list_plugin_market(
     )
 
 
+@router.get("/plugins/market/all-sources")
+async def list_plugin_market_all_sources(
+    request: Request,
+    _auth: AuthContext = Depends(require_plugin_scope),
+    service: PluginService = Depends(get_service),
+):
+    """获取所有插件源（默认源 + 自定义源）的合并数据，用于更新检测。"""
+    force_refresh = request.query_params.get("force_refresh", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    # 解析启用的自定义源列表
+    enabled_sources_param = request.query_params.get("enabled_sources", "")
+    enabled_sources = None
+    if enabled_sources_param:
+        enabled_sources = [
+            s.strip() for s in enabled_sources_param.split(",") if s.strip()
+        ]
+    result = await service.get_all_sources_plugins(
+        force_refresh=force_refresh,
+        enabled_sources=enabled_sources,
+    )
+    return ok(result)
+
+
 @router.get("/plugins/market/categories")
 async def list_plugin_market_categories(
     _auth: AuthContext = Depends(require_plugin_scope),

@@ -719,6 +719,82 @@ class PluginService:
             force_refresh=self._to_bool(force_refresh),
         )
 
+    async def get_all_sources_plugins(
+        self,
+        *,
+        force_refresh: bool = False,
+        enabled_sources: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """获取所有插件源（默认源 + 自定义源）的合并数据。
+
+        用于更新检测，会同时从所有已配置的插件源获取数据并合并结果。
+
+        Args:
+            force_refresh: 是否强制刷新缓存。
+            enabled_sources: 启用的自定义源 URL 列表。为 None 时使用所有源。
+
+        Returns:
+            包含所有源插件数据的字典，按源 URL 分组。
+
+        """
+        all_plugins: dict[str, dict] = {}
+        source_errors: list[str] = []
+
+        # 获取默认源数据（始终包含）
+        try:
+            default_data, warning = await self.get_online_plugins(
+                custom_registry=None,
+                force_refresh=force_refresh,
+            )
+            if default_data and isinstance(default_data, dict):
+                for key, plugin in default_data.items():
+                    plugin_info = plugin if isinstance(plugin, dict) else {}
+                    plugin_info["_source"] = "default"
+                    all_plugins[key] = plugin_info
+        except Exception as exc:
+            logger.warning(f"获取默认源数据失败: {exc}")
+            source_errors.append(f"默认源: {exc!s}")
+
+        # 获取自定义源数据，仅获取启用的源
+        custom_sources = await self.get_custom_sources()
+        for source in custom_sources:
+            if not isinstance(source, dict):
+                continue
+            source_url = source.get("url")
+            source_name = source.get("name", source_url)
+            if not source_url:
+                continue
+            # 如果指定了启用的源列表，跳过未启用的源
+            if enabled_sources is not None and source_url not in enabled_sources:
+                continue
+
+            try:
+                source_data, _ = await self.get_online_plugins(
+                    custom_registry=source_url,
+                    force_refresh=force_refresh,
+                )
+                if source_data and isinstance(source_data, dict):
+                    for key, plugin in source_data.items():
+                        plugin_info = plugin if isinstance(plugin, dict) else {}
+                        plugin_info["_source"] = source_name
+                        # 如果插件已存在，保留版本更高的那个
+                        if key in all_plugins:
+                            existing_version = all_plugins[key].get("version", "")
+                            new_version = plugin_info.get("version", "")
+                            if new_version and new_version > existing_version:
+                                all_plugins[key] = plugin_info
+                        else:
+                            all_plugins[key] = plugin_info
+            except Exception as exc:
+                logger.warning(f"获取自定义源 {source_name} 数据失败: {exc}")
+                source_errors.append(f"{source_name}: {exc!s}")
+
+        return {
+            "plugins": all_plugins,
+            "errors": source_errors,
+            "total": len(all_plugins),
+        }
+
     @staticmethod
     def build_registry_source(custom_url: str | None) -> RegistrySource:
         data_dir = get_astrbot_data_path()

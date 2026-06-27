@@ -96,6 +96,7 @@ export const useExtensionPage = () => {
     i18n: {},
   });
   const pluginMarketData = ref([]);
+  const allSourcesPluginData = ref([]); // 存储所有源的插件数据，用于更新检测
   const loadingDialog = reactive({
     show: false,
     title: "",
@@ -173,6 +174,9 @@ export const useExtensionPage = () => {
   const sourceToRemove = ref(null);
   const editingSource = ref(false);
   const originalSourceUrl = ref("");
+
+  // 启用的自定义源 URL 列表（用于更新检测合并），默认全部启用
+  const enabledSources = ref(null); // null 表示全部启用，[] 表示全部禁用
 
   // 插件市场相关
   const extension_url = ref("");
@@ -613,18 +617,25 @@ export const useExtensionPage = () => {
 
   const findMarketPluginForExtension = (extension) => {
     if (!extension) return null;
+
+    // 优先使用所有源的数据进行查找，以获取最全面的更新信息
+    const searchSourceData = allSourcesPluginData.value.length > 0
+      ? allSourcesPluginData.value
+      : pluginMarketData.value;
+
     const repo = normalizeInstallUrl(extension.repo).toLowerCase();
 
     if (repo) {
-      return (
-        pluginMarketData.value.find(
-          (plugin) => normalizeInstallUrl(plugin?.repo).toLowerCase() === repo,
-        ) || null
+      // 先在所有源数据中查找匹配的插件
+      const found = searchSourceData.find(
+        (plugin) => normalizeInstallUrl(plugin?.repo).toLowerCase() === repo,
       );
+      if (found) return found;
     }
 
+    // 按名称查找
     return (
-      pluginMarketData.value.find((plugin) => plugin.name === extension.name) ||
+      searchSourceData.find((plugin) => plugin.name === extension.name) ||
       null
     );
   };
@@ -633,19 +644,32 @@ export const useExtensionPage = () => {
     String(findMarketPluginForExtension(extension)?.download_url || "").trim();
 
   const checkUpdate = () => {
+    // 使用所有源的插件数据来检测更新，而不是只使用当前选择的源
+    const updateSourceData = allSourcesPluginData.value.length > 0
+      ? allSourcesPluginData.value
+      : pluginMarketData.value;
+
     const onlinePluginsMap = new Map();
     const onlinePluginsNameMap = new Map();
 
-    pluginMarketData.value.forEach((plugin) => {
+    updateSourceData.forEach((plugin) => {
       if (plugin.repo) {
-        onlinePluginsMap.set(normalizeInstallUrl(plugin.repo).toLowerCase(), plugin);
+        const repoKey = normalizeInstallUrl(plugin.repo).toLowerCase();
+        // 如果已存在相同 repo 的插件，保留版本更高的那个
+        const existing = onlinePluginsMap.get(repoKey);
+        if (!existing || (plugin.version && plugin.version > (existing.version || ""))) {
+          onlinePluginsMap.set(repoKey, plugin);
+        }
       }
       const normalizedName = normalizeStr(plugin.name);
-      onlinePluginsNameMap.set(normalizedName, plugin);
+      const existingByName = onlinePluginsNameMap.get(normalizedName);
+      if (!existingByName || (plugin.version && plugin.version > (existingByName.version || ""))) {
+        onlinePluginsNameMap.set(normalizedName, plugin);
+      }
     });
 
     const data = Array.isArray(extension_data?.data) ? extension_data.data : [];
-    
+
     data.forEach((extension) => {
       const repoKey = extension.repo ? normalizeInstallUrl(extension.repo).toLowerCase() : undefined;
       const onlinePlugin = repoKey ? onlinePluginsMap.get(repoKey) : null;
@@ -661,9 +685,12 @@ export const useExtensionPage = () => {
         extension.has_update =
           extension.version !== matchedPlugin.version &&
           matchedPlugin.version !== tm("status.unknown");
+        // 记录更新来源
+        extension.update_source = matchedPlugin._source || "";
       } else {
         extension.online_version = "";
         extension.has_update = false;
+        extension.update_source = "";
       }
     });
   };
@@ -756,6 +783,17 @@ export const useExtensionPage = () => {
         toast(tm("messages.refreshing"), "info", 2000);
         try {
           await getExtensions();
+          // 更新后重新获取所有源数据并检测更新
+          try {
+            const allSourcesData = await commonStore.getAllSourcesPluginCollections(
+              true,
+              getEnabledSourcesParam()
+            );
+            allSourcesPluginData.value = allSourcesData;
+            checkUpdate();
+          } catch (err) {
+            console.warn("更新后获取所有源数据失败:", err);
+          }
           toast(tm("messages.refreshSuccess"), "success");
 
           // 更新完成后弹出更新日志
@@ -844,6 +882,17 @@ export const useExtensionPage = () => {
       const failures = results.filter((r) => r.status !== "ok");
       try {
         await getExtensions();
+        // 更新后重新获取所有源数据并检测更新
+        try {
+          const allSourcesData = await commonStore.getAllSourcesPluginCollections(
+            true,
+            getEnabledSourcesParam()
+          );
+          allSourcesPluginData.value = allSourcesData;
+          checkUpdate();
+        } catch (err) {
+          console.warn("更新后获取所有源数据失败:", err);
+        }
       } catch (err) {
         const errorMsg =
           err.response?.data?.message || err.message || String(err);
@@ -1064,11 +1113,62 @@ export const useExtensionPage = () => {
       customSources.value = [];
     }
 
+    // 加载启用的源列表（用于更新检测合并）
+    const savedEnabled = localStorage.getItem("enabledPluginSources");
+    if (savedEnabled) {
+      try {
+        enabledSources.value = JSON.parse(savedEnabled);
+      } catch {
+        enabledSources.value = null;
+      }
+    } else {
+      enabledSources.value = null; // 默认全部启用
+    }
+
     // 加载当前选中的插件源
     const currentSource = localStorage.getItem("selectedPluginSource");
     if (currentSource) {
       selectedSource.value = currentSource;
     }
+  };
+
+  // 切换源的启用状态（用于更新检测合并）
+  const toggleSourceEnabled = (sourceUrl) => {
+    if (!sourceUrl) return;
+    const currentEnabled = enabledSources.value;
+    let newEnabled;
+    if (currentEnabled === null) {
+      // 当前全部启用，禁用该源 -> 变为排除该源的列表
+      newEnabled = customSources.value
+        .map((s) => s.url)
+        .filter((url) => url !== sourceUrl);
+    } else if (currentEnabled.includes(sourceUrl)) {
+      // 当前已启用，禁用该源
+      newEnabled = currentEnabled.filter((url) => url !== sourceUrl);
+    } else {
+      // 当前未启用，启用该源
+      newEnabled = [...currentEnabled, sourceUrl];
+    }
+    // 如果所有源都启用了，恢复为 null（全部启用）
+    if (newEnabled.length === customSources.value.length) {
+      newEnabled = null;
+    }
+    enabledSources.value = newEnabled;
+    localStorage.setItem("enabledPluginSources", JSON.stringify(newEnabled));
+  };
+
+  // 判断某个源是否启用
+  const isSourceEnabled = (sourceUrl) => {
+    if (enabledSources.value === null) return true;
+    return enabledSources.value.includes(sourceUrl);
+  };
+
+  // 获取启用的源 URL 列表（逗号分隔，用于传给后端 API）
+  const getEnabledSourcesParam = () => {
+    if (enabledSources.value === null || enabledSources.value.length === 0) {
+      return null;
+    }
+    return enabledSources.value.join(",");
   };
 
   const saveCustomSources = async () => {
@@ -1609,6 +1709,19 @@ export const useExtensionPage = () => {
       trimExtensionName();
       checkAlreadyInstalled();
       await annotateMarketVersionSupport();
+
+      // 同时获取所有源的数据用于更新检测
+      try {
+        const allSourcesData = await commonStore.getAllSourcesPluginCollections(
+          true,
+          getEnabledSourcesParam()
+        );
+        allSourcesPluginData.value = allSourcesData;
+      } catch (err) {
+        console.warn("获取所有源数据失败，使用当前源数据进行更新检测:", err);
+        allSourcesPluginData.value = [];
+      }
+
       checkUpdate();
       refreshRandomPlugins();
       currentPage.value = 1; // 重置到第一页
@@ -1651,6 +1764,19 @@ export const useExtensionPage = () => {
       trimExtensionName();
       checkAlreadyInstalled();
       await annotateMarketVersionSupport();
+
+      // 同时获取所有源的数据用于更新检测
+      try {
+        const allSourcesData = await commonStore.getAllSourcesPluginCollections(
+          false,
+          getEnabledSourcesParam()
+        );
+        allSourcesPluginData.value = allSourcesData;
+      } catch (err) {
+        console.warn("获取所有源数据失败，使用当前源数据进行更新检测:", err);
+        allSourcesPluginData.value = [];
+      }
+
       checkUpdate();
       refreshRandomPlugins();
     } catch (err) {
@@ -1763,6 +1889,7 @@ export const useExtensionPage = () => {
     configDialog,
     extension_config,
     pluginMarketData,
+    allSourcesPluginData,
     loadingDialog,
     curr_namespace,
     updatingAll,
@@ -1886,5 +2013,9 @@ export const useExtensionPage = () => {
     refreshPluginMarket,
     handleLocaleChange,
     searchDebounceTimer,
+    enabledSources,
+    toggleSourceEnabled,
+    isSourceEnabled,
+    getEnabledSourcesParam,
   };
 };

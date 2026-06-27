@@ -1,7 +1,6 @@
 import asyncio
 import re
 from collections.abc import AsyncGenerator, Iterable
-from pathlib import Path
 from typing import cast
 
 from slack_sdk.web.async_client import AsyncWebClient
@@ -49,7 +48,7 @@ class SlackMessageEvent(AstrMessageEvent):
             path = await segment.convert_to_file_path()
             response = await web_client.files_upload_v2(
                 file=path,
-                filename=Path(path).name,
+                filename="image.jpg",
             )
             if not response["ok"]:
                 logger.error(f"Slack file upload failed: {response['error']}")

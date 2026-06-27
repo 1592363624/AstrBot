@@ -1269,6 +1269,13 @@ export const pluginApi = {
   }) {
     return typed<any>(openApiV1.listPluginMarket({ query: params }));
   },
+  marketAllSources(params?: { force_refresh?: boolean; enabled_sources?: string }) {
+    return typed<any>(
+      apiV1Client.get<ApiEnvelope<any>>("/plugins/market/all-sources", {
+        params,
+      }),
+    );
+  },
   sources() {
     return typed<any>(openApiV1.listPluginSources());
   },

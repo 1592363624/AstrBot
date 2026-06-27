@@ -29,11 +29,7 @@ from astrbot.core import logger
 from astrbot.core.platform.astr_message_event import MessageSesion
 from astrbot.core.platform.webhook_server import FastAPIWebhookServer
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
-from astrbot.core.utils.media_utils import (
-    MEDIA_MIME_EXTENSIONS,
-    MediaResolver,
-    detect_image_mime_type_async,
-)
+from astrbot.core.utils.media_utils import MediaResolver
 from astrbot.core.utils.webhook_utils import log_webhook_info
 
 from .wecom_event import WecomPlatformEvent
@@ -392,7 +388,8 @@ class WecomPlatformAdapter(Platform):
             )
             temp_dir = get_astrbot_temp_path()
             path = os.path.join(temp_dir, f"wecom_{msg.media_id}.amr")
-            await asyncio.to_thread(Path(path).write_bytes, resp.content)
+            with open(path, "wb") as f:
+                f.write(resp.content)
 
             try:
                 path_wav = await MediaResolver(
@@ -456,13 +453,9 @@ class WecomPlatformAdapter(Platform):
                 media_id,
             )
             temp_dir = get_astrbot_temp_path()
-            mime_type = await detect_image_mime_type_async(
-                resp.content,
-                default_mime_type=None,
-            )
-            suffix = MEDIA_MIME_EXTENSIONS.get(mime_type or "", ".jpg")
-            path = os.path.join(temp_dir, f"weixinkefu_{media_id}{suffix}")
-            await asyncio.to_thread(Path(path).write_bytes, resp.content)
+            path = os.path.join(temp_dir, f"weixinkefu_{media_id}.jpg")
+            with open(path, "wb") as f:
+                f.write(resp.content)
             abm.message = [Image(file=path, url=path)]
         elif msgtype == "voice":
             media_id = msg.get("voice", {}).get("media_id", "")
@@ -474,7 +467,8 @@ class WecomPlatformAdapter(Platform):
 
             temp_dir = get_astrbot_temp_path()
             path = os.path.join(temp_dir, f"weixinkefu_{media_id}.amr")
-            await asyncio.to_thread(Path(path).write_bytes, resp.content)
+            with open(path, "wb") as f:
+                f.write(resp.content)
 
             try:
                 path_wav = await MediaResolver(

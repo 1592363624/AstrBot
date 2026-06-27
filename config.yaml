@@ -1,0 +1,8 @@
+# 插件注册表生成器配置文件
+
+# 输出的插件注册表 JSON 文件路径
+output: plugins.json
+
+# 检查间隔（秒），用于 GitHub Actions 定时任务
+# 默认 300 秒（5 分钟）
+check_interval: 300

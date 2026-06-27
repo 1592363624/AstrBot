@@ -240,5 +240,69 @@ export const useCommonStore = defineStore("common", {
           return Promise.reject(err);
         });
     },
+
+    async getAllSourcesPluginCollections(force = false, enabledSources = null) {
+      /** 获取所有插件源（默认源 + 自定义源）的合并数据，用于更新检测。
+       *  @param {boolean} force - 是否强制刷新缓存
+       *  @param {string|null} enabledSources - 启用的自定义源 URL 列表（逗号分隔）
+       *  @returns {Promise<Array>} 合并后的插件数据数组
+       */
+      return pluginApi
+        .marketAllSources({ 
+          force_refresh: force || undefined,
+          enabled_sources: enabledSources || undefined
+        })
+        .then((res) => {
+          const plugins = res.data?.data?.plugins || {};
+          const data = [];
+
+          for (let key in plugins) {
+            const pluginData = plugins[key];
+            data.push({
+              ...pluginData,
+              name: pluginData.name || key,
+              desc: pluginData.desc,
+              short_desc: pluginData?.short_desc ? pluginData.short_desc : "",
+              author: pluginData.author,
+              repo: pluginData.repo,
+              installed: false,
+              version: pluginData?.version ? pluginData.version : "未知",
+              social_link: pluginData?.social_link,
+              tags: pluginData?.tags ? pluginData.tags : [],
+              logo: pluginData?.logo ? pluginData.logo : "",
+              pinned: pluginData?.pinned ? pluginData.pinned : false,
+              stars: pluginData?.stars ? pluginData.stars : 0,
+              updated_at: pluginData?.updated_at ? pluginData.updated_at : "",
+              download_url: pluginData?.download_url
+                ? pluginData.download_url
+                : "",
+              display_name: pluginData?.display_name
+                ? pluginData.display_name
+                : "",
+              i18n:
+                pluginData?.i18n && typeof pluginData.i18n === "object"
+                  ? pluginData.i18n
+                  : {},
+              astrbot_version: pluginData?.astrbot_version
+                ? pluginData.astrbot_version
+                : "",
+              category: pluginData?.category ? pluginData.category : "",
+              support_platforms: Array.isArray(pluginData?.support_platforms)
+                ? pluginData.support_platforms
+                : Array.isArray(pluginData?.support_platform)
+                ? pluginData.support_platform
+                : Array.isArray(pluginData?.platform)
+                ? pluginData.platform
+                : [],
+              _source: pluginData?._source || "unknown",
+            });
+          }
+
+          return data;
+        })
+        .catch((err) => {
+          return Promise.reject(err);
+        });
+    },
   },
 });

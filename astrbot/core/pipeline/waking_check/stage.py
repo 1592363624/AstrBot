@@ -99,50 +99,61 @@ class WakingCheckStage(Stage):
                 event.role = "admin"
                 break
 
-        # 检查 wake
+# [NoWakeWordPatch] 免唤醒词插件自动补丁
+        # 检查是否配置了 "*" 唤醒词，如果是则直接视为唤醒
         wake_prefixes = self.ctx.astrbot_config["wake_prefix"]
-        messages = event.get_messages()
-        is_wake = False
-        for wake_prefix in wake_prefixes:
-            if event.message_str.startswith(wake_prefix):
-                if (
-                    not event.is_private_chat()
-                    and isinstance(messages[0], At)
-                    and str(messages[0].qq) != str(event.get_self_id())
-                    and str(messages[0].qq) != "all"
-                ):
-                    # 如果是群聊，且第一个消息段是 At 消息，但不是 At 机器人或 At 全体成员，则不唤醒
+        is_wake = False  # 初始化 is_wake 变量
+        if "*" in wake_prefixes:
+            is_wake = True
+            event.is_wake = True
+            event.is_at_or_wake_command = True
+            # 继续执行后续的 handler filter 检查
+        else:
+            # 检查 wake
+            wake_prefixes = self.ctx.astrbot_config["wake_prefix"]
+            messages = event.get_messages()
+            is_wake = False
+            for wake_prefix in wake_prefixes:
+                if event.message_str.startswith(wake_prefix):
+                    if (
+                        not event.is_private_chat()
+                        and isinstance(messages[0], At)
+                        and str(messages[0].qq) != str(event.get_self_id())
+                        and str(messages[0].qq) != "all"
+                    ):
+                        # 如果是群聊，且第一个消息段是 At 消息，但不是 At 机器人或 At 全体成员，则不唤醒
+                        break
+                    is_wake = True
+                    event.is_at_or_wake_command = True
+                    event.is_wake = True
+                    event.message_str = event.message_str[len(wake_prefix) :].strip()
                     break
-                is_wake = True
-                event.is_at_or_wake_command = True
-                event.is_wake = True
-                event.message_str = event.message_str[len(wake_prefix) :].strip()
-                break
-        if not is_wake:
-            # 检查是否有at消息 / at全体成员消息 / 引用了bot的消息
-            for message in messages:
-                if (
-                    (
-                        isinstance(message, At)
-                        and (str(message.qq) == str(event.get_self_id()))
-                    )
-                    or (isinstance(message, AtAll) and not self.ignore_at_all)
-                    or (
-                        isinstance(message, Reply)
-                        and str(message.sender_id) == str(event.get_self_id())
-                    )
-                ):
+            if not is_wake:
+                # 检查是否有at消息 / at全体成员消息 / 引用了bot的消息
+                for message in messages:
+                    if (
+                        (
+                            isinstance(message, At)
+                            and (str(message.qq) == str(event.get_self_id()))
+                        )
+                        or (isinstance(message, AtAll) and not self.ignore_at_all)
+                        or (
+                            isinstance(message, Reply)
+                            and str(message.sender_id) == str(event.get_self_id())
+                        )
+                    ):
+                        is_wake = True
+                        event.is_wake = True
+                        wake_prefix = ""
+                        event.is_at_or_wake_command = True
+                        break
+                # 检查是否是私聊
+                if event.is_private_chat() and not self.friend_message_needs_wake_prefix:
                     is_wake = True
                     event.is_wake = True
-                    wake_prefix = ""
                     event.is_at_or_wake_command = True
-                    break
-            # 检查是否是私聊
-            if event.is_private_chat() and not self.friend_message_needs_wake_prefix:
-                is_wake = True
-                event.is_wake = True
-                event.is_at_or_wake_command = True
-                wake_prefix = ""
+                    wake_prefix = ""
+
 
         # 检查插件的 handler filter
         activated_handlers = []

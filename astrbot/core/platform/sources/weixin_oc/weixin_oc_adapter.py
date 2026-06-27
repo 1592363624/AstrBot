@@ -29,11 +29,7 @@ from astrbot.api.platform import (
 from astrbot.core import astrbot_config
 from astrbot.core.platform.astr_message_event import MessageSesion
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
-from astrbot.core.utils.media_utils import (
-    MEDIA_MIME_EXTENSIONS,
-    MediaResolver,
-    detect_image_mime_type_async,
-)
+from astrbot.core.utils.media_utils import MediaResolver
 
 from .weixin_oc_client import WeixinOCClient
 from .weixin_oc_event import WeixinOCMessageEvent
@@ -761,16 +757,11 @@ class WeixinOCAdapter(Platform):
                 )
             else:
                 content = await self.client.download_cdn_bytes(encrypted_query_param)
-            mime_type = await detect_image_mime_type_async(
-                content,
-                default_mime_type=None,
-            )
-            suffix = MEDIA_MIME_EXTENSIONS.get(mime_type or "", ".jpg")
             image_path = self._save_inbound_media(
                 content,
                 prefix="weixin_oc_img",
-                file_name=f"image{suffix}",
-                fallback_suffix=suffix,
+                file_name="image.jpg",
+                fallback_suffix=".jpg",
             )
             return Image.fromFileSystem(str(image_path))
 
