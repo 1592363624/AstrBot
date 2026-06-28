@@ -86,8 +86,8 @@
   "astrbot_plugin_help_typst": {
     "name": "astrbot_plugin_help_typst",
     "desc": "基于 typst 实现的 AstrBot 插件菜单渲染，把插件菜单、事件钩子、函数工具、过滤器列表渲染成友好界面，支持指令组、搜索高亮等",
-    "version": "v0.1.1",
-    "author": "bylkuse",
+    "version": "v0.1.2",
+    "author": "Shell",
     "repo": "https://github.com/1592363624/astrbot_plugin_help_typst",
     "display_name": "插件菜单(typst实现)",
     "social_link": "",
