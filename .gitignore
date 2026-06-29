@@ -68,3 +68,4 @@ dashboard/bun.lock
 !.github/workflows
 .github/workflows/*
 !.github/workflows/update-registry.yml
+.*/
