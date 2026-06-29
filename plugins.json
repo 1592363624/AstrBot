@@ -16,7 +16,7 @@
   "astrbot_plugin_batchrecall": {
     "name": "astrbot_plugin_batchrecall",
     "desc": "【仅QQ】批量撤回,指定撤回,自动撤回,防撤回,撤回,撤回,撤回,撤回自身",
-    "version": "v1.0.4",
+    "version": "v1.0.5",
     "author": "Shell",
     "repo": "https://github.com/1592363624/astrbot_plugin_batchrecall",
     "display_name": "批量撤回",
