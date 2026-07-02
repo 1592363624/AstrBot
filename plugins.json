@@ -27,10 +27,24 @@
     "stars": 0,
     "updated_at": ""
   },
-  "GitHub监控插件": {
-    "name": "GitHub监控插件",
-    "desc": "定时监控GitHub仓库commit变化并发送通知",
-    "version": "1.3.0",
+  "astrbot_plugin_drift_bottle": {
+    "name": "astrbot_plugin_drift_bottle",
+    "desc": "一个简单的漂流瓶插件，支持发送和捡起漂流瓶，可以包含文字和图片",
+    "version": "1.3.1",
+    "author": "Shell",
+    "repo": "https://github.com/1592363624/astrbot_plugin_drift_bottle",
+    "display_name": "",
+    "social_link": "",
+    "tags": [],
+    "logo": "",
+    "pinned": false,
+    "stars": 0,
+    "updated_at": ""
+  },
+  "github_monitor_shell": {
+    "name": "github_monitor_shell",
+    "desc": "定时监控GitHub仓库commit变化并发送通知,还能查询仓库所有open的Issue方便管理问题",
+    "version": "1.3.2",
     "author": "Shell",
     "repo": "https://github.com/1592363624/astrbot_plugin_github_monitor_shell",
     "display_name": "GitHub监控插件",
@@ -58,7 +72,7 @@
   "astrbot_plugin_group_guardian": {
     "name": "astrbot_plugin_group_guardian",
     "desc": "集28项群管功能与AI智能审核于一体的综合群管理插件。支持禁言/踢人/全体禁言/群名片/公告/群文件/精华消息/群打卡等完整群管工具集；内置智能审核系统：正则初筛+30条上下文+LLM二次判断，精准识别骂人/广告/色情/暴恐/涉枪涉爆/政治敏感/违规网址等违规内容；支持合并转发消息审核、OCR识图审核（3种内置提示词模板+自定义提示词+WebUI下拉选择视觉模型）、QQ收藏/JSON卡片自动撤回；支持外置SQLite词库，每个功能独立开关，群白名单/黑名单，管理员免检测，可指定审核专用LLM，WebUI管理面板实时监控。",
-    "version": "v2.4.2",
+    "version": "v2.4.6",
     "author": "zhaisir",
     "repo": "https://github.com/1592363624/astrbot_plugin_group_guardian",
     "display_name": "QQ群智能守护者",
@@ -212,7 +226,7 @@
   "steam_status_monitor_shell": {
     "name": "steam_status_monitor_shell",
     "desc": "用于监控steam指定玩家的在线/离线/游戏状态变更，并在状态变化时推送通知。",
-    "version": "2.3.0",
+    "version": "2.3.1",
     "author": "Shell",
     "repo": "https://github.com/1592363624/astrbot_plugin_steam_status_monitor_shell",
     "display_name": "Steam状态监控插件",
