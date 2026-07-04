@@ -6,9 +6,9 @@ on:
     branches:
       - master
   
-  # 定时任务：每 3 小时检查一次插件仓库更新
+  # 定时任务：每 1 小时检查一次插件仓库更新
   schedule:
-    - cron: '0 */3 * * *'
+    - cron: '0 */1 * * *'
   
   # 手动触发
   workflow_dispatch:
