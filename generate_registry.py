@@ -22,7 +22,8 @@
 import argparse
 import json
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -645,6 +646,28 @@ CHANGELOG_SEPARATOR: str = "---"
 MAX_CHANGELOG_ENTRIES: int = 10
 
 
+def format_version(version: str) -> str:
+    """
+    格式化版本号，统一为 `v` 前缀 + 纯数字版本号。
+
+    处理作者可能写的各种格式，如 `v1.0.0`、`1.0.0`、`vv1.0.0` 等，
+    统一输出为 `v1.0.0` 格式。
+
+    Args:
+        version: 原始版本号字符串。
+
+    Returns:
+        str: 格式化后的版本号，如 `v1.0.0`。
+    """
+    # 移除开头和结尾多余的 v/V，统一为单个 v 前缀
+    cleaned = str(version).strip()
+    cleaned = re.sub(r"^[vV]+", "", cleaned)  # 去掉开头所有 v/V
+    cleaned = re.sub(r"[vV]+$", "", cleaned)  # 去掉结尾所有 v/V
+    if not cleaned:
+        return "v0.0.0"
+    return f"v{cleaned}"
+
+
 def update_readme_changelog(
     readme_path: Path,
     added: Dict[str, Dict[str, Any]],
@@ -660,20 +683,22 @@ def update_readme_changelog(
         removed: 移除插件字典。
         updated: 更新插件字典，值为字段变更映射。
     """
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 使用北京时间（UTC+8），避免 GitHub Actions 服务器时区差异
+    beijing_tz = timezone(timedelta(hours=8))
+    now = datetime.now(beijing_tz).strftime("%Y-%m-%d %H:%M:%S")
 
     # 构建本次变更条目
     changes: List[str] = []
     for name, entry in added.items():
-        version = entry.get("version", "")
-        changes.append(f"  - **[新增]** `{name}` v{version}")
+        version = format_version(entry.get("version", ""))
+        changes.append(f"  - **[新增]** `{name}` {version}")
     for name, entry in removed.items():
-        version = entry.get("version", "")
+        version = format_version(entry.get("version", ""))
         changes.append(f"  - **[移除]** `{name}` (原版本: {version})")
     for name, fields in updated.items():
         version_old, version_new = fields.get("version", ("", ""))
         if version_old != version_new:
-            changes.append(f"  - **[更新]** `{name}` v{version_old} -> v{version_new}")
+            changes.append(f"  - **[更新]** `{name}` {format_version(version_old)} -> {format_version(version_new)}")
         else:
             changes.append(f"  - **[变更]** `{name}` 元数据发生更新")
 
@@ -918,13 +943,13 @@ def main() -> None:
     else:
         print("\n变更详情：")
         for name, entry in added.items():
-            print(f"  [新增] {name} 版本 {entry.get('version', '')}")
+            print(f"  [新增] {name} 版本 {format_version(entry.get('version', ''))}")
         for name, entry in removed.items():
-            print(f"  [移除] {name} 原版本 {entry.get('version', '')}")
+            print(f"  [移除] {name} 原版本 {format_version(entry.get('version', ''))}")
         for name, fields in updated.items():
             version_old, version_new = fields.get("version", ("", ""))
             if version_old != version_new:
-                print(f"  [更新] {name} 版本 {version_old} -> {version_new}")
+                print(f"  [更新] {name} 版本 {format_version(version_old)} -> {format_version(version_new)}")
             else:
                 print(f"  [变更] {name} 元数据发生更新")
 
