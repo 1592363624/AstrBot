@@ -4,15 +4,23 @@
 
 ---
 
+### 2026-07-04 22:36:53
+
+  - **[更新]** `astrbot_plugin_group_guardian` v2.4.6 -> v2.6.1
+
+
+
 ### 2026-07-03 06:26:04
 
   - **[更新]** `astrbot_plugin_drift_bottle` v1.3.2 -> v1.3.3
 
 
 
+
 ### 2026-07-03 02:23:01
 
   - **[更新]** `astrbot_plugin_drift_bottle` v1.3.1 -> v1.3.2
+
 
 
 
@@ -29,6 +37,7 @@
 
 
 
+
 ### 2026-07-02 06:35:43
 
   - **[更新]** `GitHub监控插件` v1.2.6 -> v1.3.0
@@ -38,9 +47,11 @@
 
 
 
+
 ### 2026-06-29 17:31:59
 
   - **[更新]** `astrbot_plugin_batchrecall` vv1.0.4 -> vv1.0.5
+
 
 
 
@@ -60,9 +71,11 @@
 
 
 
+
 ### 2026-06-29 07:25:23
 
   - **[更新]** `astrbot_plugin_group_guardian` vv2.4.1 -> vv2.4.2
+
 
 
 
@@ -85,23 +98,11 @@
 
 
 
+
 ### 2026-06-27 16:00:33
 
   - **[新增]** `astrbot_plugin_help_typst` vv0.1.1
 
-
-
-
-
-
-
-
-
-
-
-### 2026-06-27 13:20:06
-
-  - **[新增]** `astrbot_plugin_group_geetest_verify` vv1.3.3
 
 
 
