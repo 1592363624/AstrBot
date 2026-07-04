@@ -10,6 +10,10 @@ sources:
   - repo: https://github.com/1592363624/astrbot_plugin_batchrecall
     type: single
 
+  # 漂流瓶插件 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_drift_bottle
+    type: single
+
   # 定时监控GitHub仓库commit变化并发送通知
   - repo: https://github.com/1592363624/astrbot_plugin_github_monitor_shell
     type: single
