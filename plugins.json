@@ -183,8 +183,8 @@
   },
   "Rcon连接插件": {
     "name": "Rcon连接插件",
-    "desc": "定时监控Rcon连接执行并发送通知",
-    "version": "1.1.0",
+    "desc": "定时监控Rcon连接执行并发送通知，对接Palworld REST API，提供WebUI管理面板",
+    "version": "1.4.0",
     "author": "Shell",
     "repo": "https://github.com/1592363624/astrbot_plugin_rcon_shell",
     "display_name": "Rcon连接插件",
