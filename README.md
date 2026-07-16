@@ -4,6 +4,23 @@
 
 ---
 
+### 2026-07-17 07:53:01
+
+  - **[新增]** `astrbot_plugin_drift_bottle` v1.3.3
+  - **[新增]** `github_monitor_shell` v1.3.2
+  - **[新增]** `astrbot_plugin_group_geetest_verify` v1.3.3
+  - **[新增]** `astrbot_plugin_help` v1.1.4
+  - **[新增]** `astrbot_plugin_help_typst` v1.0.0
+  - **[新增]** `astrbot_plugin_minecraft_monitor` v2.1.1
+  - **[新增]** `astrbot_plugin_no_wake` v1.1.1
+  - **[新增]** `astrbot_plugin_qq_operater_shell` v1.2.5
+  - **[新增]** `Rcon连接插件` v1.4.0
+  - **[新增]** `重生之凡人修仙` v0.0.3
+  - **[新增]** `astrbot_plugin_zanwo_shell` v1.0.2
+  - **[更新]** `astrbot_plugin_group_guardian` v2.4.6 -> v2.6.1
+
+
+
 ### 2026-07-17 06:55:47
 
   - **[移除]** `astrbot_plugin_drift_bottle` (原版本: v1.3.3)
@@ -21,6 +38,7 @@
 
 
 
+
 ### 2026-07-11 15:10:44
 
   - **[更新]** `Rcon连接插件` v1.1.0 -> v1.4.0
@@ -28,9 +46,11 @@
 
 
 
+
 ### 2026-07-04 22:36:53
 
   - **[更新]** `astrbot_plugin_group_guardian` v2.4.6 -> v2.6.1
+
 
 
 
@@ -45,9 +65,11 @@
 
 
 
+
 ### 2026-07-03 02:23:01
 
   - **[更新]** `astrbot_plugin_drift_bottle` v1.3.1 -> v1.3.2
+
 
 
 
@@ -70,9 +92,11 @@
 
 
 
+
 ### 2026-07-02 06:35:43
 
   - **[更新]** `GitHub监控插件` v1.2.6 -> v1.3.0
+
 
 
 
@@ -95,24 +119,11 @@
 
 
 
+
 ### 2026-06-29 13:01:21
 
   - **[更新]** `astrbot_plugin_help_typst` vv0.1.2 -> v1.0.0
   - **[更新]** `astrbot_plugin_qq_operater_shell` v1.2.4 -> v1.2.5
-
-
-
-
-
-
-
-
-
-
-
-### 2026-06-29 07:25:23
-
-  - **[更新]** `astrbot_plugin_group_guardian` vv2.4.1 -> vv2.4.2
 
 
 
