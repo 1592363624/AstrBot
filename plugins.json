@@ -1,4 +1,18 @@
 {
+  "astrbot_plugin_SteamSaleTracker": {
+    "name": "astrbot_plugin_SteamSaleTracker",
+    "desc": "这是一个 Steam 游戏价格监控插件。",
+    "version": "v1.1.2",
+    "author": "bushikq",
+    "repo": "https://github.com/1592363624/astrbot_plugin_SteamSaleTracker",
+    "display_name": "",
+    "social_link": "",
+    "tags": [],
+    "logo": "",
+    "pinned": false,
+    "stars": 0,
+    "updated_at": ""
+  },
   "astrbot_plugin_batchrecall": {
     "name": "astrbot_plugin_batchrecall",
     "desc": "【仅QQ】批量撤回,编号撤回(所有人),引用撤回,指定撤回,自动撤回,防撤回,撤回自身",
