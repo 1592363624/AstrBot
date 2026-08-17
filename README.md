@@ -4,6 +4,16 @@
 
 ---
 
+### 2026-08-18 01:19:46
+
+  - **[新增]** `astrbot_plugin_SteamSaleTracker` v1.1.2
+  - **[新增]** `github_monitor_shell` v1.3.4
+  - **[新增]** `astrbot_plugin_group_geetest_verify` v1.3.3
+  - **[新增]** `astrbot_plugin_group_guardian` v2.6.1
+  - **[新增]** `astrbot_plugin_shell_emoji_reply` v1.0.3
+
+
+
 ### 2026-08-18 00:18:20
 
   - **[新增]** `astrbot_plugin_minecraft_monitor` v2.1.1
@@ -16,6 +26,7 @@
   - **[移除]** `astrbot_plugin_SteamSaleTracker` (原版本: v1.1.2)
   - **[移除]** `github_monitor_shell` (原版本: v1.3.4)
   - **[移除]** `astrbot_plugin_group_guardian` (原版本: v2.6.1)
+
 
 
 
@@ -34,9 +45,11 @@
 
 
 
+
 ### 2026-08-12 23:52:24
 
   - **[更新]** `github_monitor_shell` v1.3.3 -> v1.3.4
+
 
 
 
@@ -51,9 +64,11 @@
 
 
 
+
 ### 2026-08-10 17:09:47
 
   - **[移除]** `astrbot_plugin_SteamSaleTracker` (原版本: v1.1.2)
+
 
 
 
@@ -72,9 +87,11 @@
 
 
 
+
 ### 2026-07-30 15:29:28
 
   - **[更新]** `astrbot_plugin_batchrecall` v1.0.5 -> v1.1.0
+
 
 
 
@@ -108,6 +125,7 @@
 
 
 
+
 ### 2026-07-17 06:55:47
 
   - **[移除]** `astrbot_plugin_drift_bottle` (原版本: v1.3.3)
@@ -122,20 +140,6 @@
   - **[移除]** `重生之凡人修仙` (原版本: v0.0.3)
   - **[移除]** `astrbot_plugin_zanwo_shell` (原版本: v1.0.2)
   - **[更新]** `astrbot_plugin_group_guardian` v2.6.1 -> v2.4.6
-
-
-
-
-
-
-
-
-
-
-
-### 2026-07-11 15:10:44
-
-  - **[更新]** `Rcon连接插件` v1.1.0 -> v1.4.0
 
 
 
