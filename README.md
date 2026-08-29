@@ -4,15 +4,23 @@
 
 ---
 
+### 2026-08-29 17:44:58
+
+  - **[新增]** `astrbot_plugin_zanwo_shell` v1.0.2
+
+
+
 ### 2026-08-29 10:58:30
 
   - **[移除]** `astrbot_plugin_zanwo_shell` (原版本: v1.0.2)
 
 
 
+
 ### 2026-08-26 13:25:46
 
   - **[更新]** `github_monitor_shell` v1.3.6 -> v1.3.7
+
 
 
 
@@ -25,9 +33,11 @@
 
 
 
+
 ### 2026-08-25 00:26:28
 
   - **[更新]** `github_monitor_shell` v1.3.4 -> v1.3.5
+
 
 
 
@@ -48,6 +58,7 @@
 
 
 
+
 ### 2026-08-18 00:18:20
 
   - **[新增]** `astrbot_plugin_minecraft_monitor` v2.1.1
@@ -60,6 +71,7 @@
   - **[移除]** `astrbot_plugin_SteamSaleTracker` (原版本: v1.1.2)
   - **[移除]** `github_monitor_shell` (原版本: v1.3.4)
   - **[移除]** `astrbot_plugin_group_guardian` (原版本: v2.6.1)
+
 
 
 
@@ -88,6 +100,7 @@
 
 
 
+
 ### 2026-08-12 23:52:24
 
   - **[更新]** `github_monitor_shell` v1.3.3 -> v1.3.4
@@ -101,23 +114,10 @@
 
 
 
+
 ### 2026-08-10 19:00:06
 
   - **[新增]** `astrbot_plugin_SteamSaleTracker` v1.1.2
-
-
-
-
-
-
-
-
-
-
-
-### 2026-08-10 17:09:47
-
-  - **[移除]** `astrbot_plugin_SteamSaleTracker` (原版本: v1.1.2)
 
 
 
