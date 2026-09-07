@@ -4,9 +4,16 @@
 
 ---
 
+### 2026-09-08 00:56:09
+
+  - **[更新]** `github_monitor_shell` v1.4.2 -> v1.4.3
+
+
+
 ### 2026-09-05 17:43:24
 
   - **[更新]** `github_monitor_shell` v1.4.1 -> v1.4.2
+
 
 
 
@@ -17,9 +24,11 @@
 
 
 
+
 ### 2026-08-29 17:44:58
 
   - **[新增]** `astrbot_plugin_zanwo_shell` v1.0.2
+
 
 
 
@@ -34,9 +43,11 @@
 
 
 
+
 ### 2026-08-26 13:25:46
 
   - **[更新]** `github_monitor_shell` v1.3.6 -> v1.3.7
+
 
 
 
@@ -55,9 +66,11 @@
 
 
 
+
 ### 2026-08-25 00:26:28
 
   - **[更新]** `github_monitor_shell` v1.3.4 -> v1.3.5
+
 
 
 
@@ -84,6 +97,7 @@
 
 
 
+
 ### 2026-08-18 00:18:20
 
   - **[新增]** `astrbot_plugin_minecraft_monitor` v2.1.1
@@ -96,28 +110,6 @@
   - **[移除]** `astrbot_plugin_SteamSaleTracker` (原版本: v1.1.2)
   - **[移除]** `github_monitor_shell` (原版本: v1.3.4)
   - **[移除]** `astrbot_plugin_group_guardian` (原版本: v2.6.1)
-
-
-
-
-
-
-
-
-
-
-
-### 2026-08-17 23:21:00
-
-  - **[移除]** `astrbot_plugin_group_geetest_verify` (原版本: v1.3.3)
-  - **[移除]** `astrbot_plugin_minecraft_monitor` (原版本: v2.1.1)
-  - **[移除]** `astrbot_plugin_xiuxian` (原版本: v0.9.1)
-  - **[移除]** `astrbot_plugin_no_wake` (原版本: v1.1.1)
-  - **[移除]** `qq_group_sign` (原版本: v2.3.0)
-  - **[移除]** `astrbot_plugin_qq_operater_shell` (原版本: v1.2.5)
-  - **[移除]** `Rcon连接插件` (原版本: v1.4.0)
-  - **[移除]** `astrbot_plugin_shell_emoji_reply` (原版本: v1.0.3)
-  - **[移除]** `重生之凡人修仙` (原版本: v0.0.3)
 
 
 
