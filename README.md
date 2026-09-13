@@ -4,9 +4,16 @@
 
 ---
 
+### 2026-09-13 15:50:44
+
+  - **[更新]** `astrbot_plugin_batchrecall` v1.1.0 -> v1.1.2
+
+
+
 ### 2026-09-12 19:49:57
 
   - **[更新]** `github_monitor_shell` v1.4.3 -> v1.5.0
+
 
 
 
@@ -17,9 +24,11 @@
 
 
 
+
 ### 2026-09-05 17:43:24
 
   - **[更新]** `github_monitor_shell` v1.4.1 -> v1.4.2
+
 
 
 
@@ -34,9 +43,11 @@
 
 
 
+
 ### 2026-08-29 17:44:58
 
   - **[新增]** `astrbot_plugin_zanwo_shell` v1.0.2
+
 
 
 
@@ -55,9 +66,11 @@
 
 
 
+
 ### 2026-08-26 13:25:46
 
   - **[更新]** `github_monitor_shell` v1.3.6 -> v1.3.7
+
 
 
 
@@ -80,27 +93,10 @@
 
 
 
+
 ### 2026-08-25 00:26:28
 
   - **[更新]** `github_monitor_shell` v1.3.4 -> v1.3.5
-
-
-
-
-
-
-
-
-
-
-
-### 2026-08-18 01:19:46
-
-  - **[新增]** `astrbot_plugin_SteamSaleTracker` v1.1.2
-  - **[新增]** `github_monitor_shell` v1.3.4
-  - **[新增]** `astrbot_plugin_group_geetest_verify` v1.3.3
-  - **[新增]** `astrbot_plugin_group_guardian` v2.6.1
-  - **[新增]** `astrbot_plugin_shell_emoji_reply` v1.0.3
 
 
 
