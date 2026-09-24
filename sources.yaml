@@ -70,6 +70,10 @@ sources:
   - repo: https://github.com/1592363624/astrbot_plugin_steam_status_monitor_shell
     type: single
 
+  # 文档
+  - repo: https://github.com/1592363624/astrbot_plugin_xiantu_shell_doc
+    type: single
+
   # astrbot_plugin_xiuxian_shell
   - repo: https://github.com/1592363624/astrbot_plugin_xiuxian_shell
     type: single
