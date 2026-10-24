@@ -4,9 +4,17 @@
 
 ---
 
+### 2026-10-24 23:07:32
+
+  - **[新增]** `astrbot_plugin_qq_enhance` v1.12.0
+  - **[更新]** `astrbot_plugin_qq_operater_shell` v1.2.7 -> v1.4.1
+
+
+
 ### 2026-10-19 13:32:05
 
   - **[更新]** `astrbot_plugin_qq_operater_shell` v1.2.6 -> v1.2.7
+
 
 
 
@@ -17,9 +25,11 @@
 
 
 
+
 ### 2026-10-03 13:55:59
 
   - **[更新]** `astrbot_plugin_qq_operater_shell` v1.2.5 -> v1.2.6
+
 
 
 
@@ -34,9 +44,11 @@
 
 
 
+
 ### 2026-09-12 19:49:57
 
   - **[更新]** `github_monitor_shell` v1.4.3 -> v1.5.0
+
 
 
 
@@ -55,9 +67,11 @@
 
 
 
+
 ### 2026-09-05 17:43:24
 
   - **[更新]** `github_monitor_shell` v1.4.1 -> v1.4.2
+
 
 
 
@@ -80,23 +94,10 @@
 
 
 
+
 ### 2026-08-29 17:44:58
 
   - **[新增]** `astrbot_plugin_zanwo_shell` v1.0.2
-
-
-
-
-
-
-
-
-
-
-
-### 2026-08-29 10:58:30
-
-  - **[移除]** `astrbot_plugin_zanwo_shell` (原版本: v1.0.2)
 
 
 

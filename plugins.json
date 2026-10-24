@@ -153,6 +153,20 @@
     "stars": 0,
     "updated_at": ""
   },
+  "astrbot_plugin_qq_enhance": {
+    "name": "astrbot_plugin_qq_enhance",
+    "desc": "面向 NapCat / SnowLuma OneBot v11，提供 29 个模型工具、82 个操作，涵盖消息与卡片发送、好友互动、账号与群管理、历史查询、文件处理、跨会话交流、图片文字识别及申请审批；支持网页阅读、消息防抖、语音识别、表情与卡片感知、撤回感知、平台事件处理、权限控制、二次确认与审计诊断。",
+    "version": "1.12.0",
+    "author": "rytte",
+    "repo": "https://github.com/1592363624/astrbot_plugin_qq_enhance",
+    "display_name": "QQ 能力增强",
+    "social_link": "",
+    "tags": [],
+    "logo": "",
+    "pinned": false,
+    "stars": 0,
+    "updated_at": ""
+  },
   "qq_group_sign": {
     "name": "qq_group_sign",
     "desc": "QQ群自动定时打卡插件，支持 send_group_sign API 签到、白名单模式、管理员通知、统计等功能。支持 LLBot / NapCat",
@@ -170,10 +184,10 @@
   "astrbot_plugin_qq_operater_shell": {
     "name": "astrbot_plugin_qq_operater_shell",
     "desc": "【仅QQ】调用QQ接口来实现QQ群操作管理等行为",
-    "version": "1.2.7",
+    "version": "1.4.1",
     "author": "Shell",
     "repo": "https://github.com/1592363624/astrbot_plugin_qq_operater_shell",
-    "display_name": "QQ操作插件",
+    "display_name": "QQ操作插件, 反馈待办管理,茄子模仿者,一堆奇奇怪怪可能好用，也可能好玩的小功能。",
     "social_link": "",
     "tags": [],
     "logo": "",

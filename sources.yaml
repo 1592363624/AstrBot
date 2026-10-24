@@ -46,6 +46,10 @@ sources:
   - repo: https://github.com/1592363624/astrbot_plugin_no_wake
     type: single
 
+  # 面向 AstrBot + OneBot v11（NapCat / SnowLuma）的 QQ 增强插件 (fork)
+  - repo: https://github.com/1592363624/astrbot_plugin_qq_enhance
+    type: single
+
   # QQ群打卡插件，支持自动定时打卡、白名单模式、管理员通知等功能 (fork)
   - repo: https://github.com/1592363624/astrbot_plugin_qq_group_sign
     type: single
