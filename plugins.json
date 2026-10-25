@@ -184,7 +184,7 @@
   "astrbot_plugin_qq_operater_shell": {
     "name": "astrbot_plugin_qq_operater_shell",
     "desc": "【仅QQ】调用QQ接口来实现QQ群操作管理等行为",
-    "version": "1.6.0",
+    "version": "1.6.1",
     "author": "Shell",
     "repo": "https://github.com/1592363624/astrbot_plugin_qq_operater_shell",
     "display_name": "QQ操作插件",
